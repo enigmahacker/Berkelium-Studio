@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useStudioStore } from '../../store/useStudioStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { checkHealth, uploadImageOcr, uploadPdfOcr } from '../../services/api';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { 
@@ -7,17 +8,15 @@ import {
   Wind, 
   ShieldAlert, 
   Code2, 
-  Play, 
-  Cpu, 
-  CheckCircle2, 
-  AlertCircle, 
   FolderOpen, 
   Download, 
   FileText, 
   ChevronDown,
   Sparkles,
   Zap,
-  RefreshCw
+  User,
+  LogIn,
+  LogOut
 } from 'lucide-react';
 
 export default function TopMenu() {
@@ -35,7 +34,9 @@ export default function TopMenu() {
     telemetry
   } = useStudioStore();
 
+  const { user, isAuthenticated, openAuthModal, logout } = useAuthStore();
   const [activeMenu, setActiveMenu] = useState(null);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const fileInputRef = useRef(null);
   const pdfInputRef = useRef(null);
 
@@ -485,6 +486,69 @@ export default function TopMenu() {
           <Sparkles size={13} />
           <span>AI Design</span>
         </button>
+
+        {/* User Account / OAuth 2.0 Status */}
+        <div className="relative pl-1 border-l border-zinc-800">
+          {isAuthenticated && user ? (
+            <div className="relative">
+              <button
+                onClick={() => setUserMenuOpen(!userMenuOpen)}
+                className="flex items-center gap-2 px-2 py-1 rounded-full bg-zinc-800/80 hover:bg-zinc-700/80 border border-zinc-700 text-xs transition-all"
+                title={user.email}
+              >
+                {user.avatar ? (
+                  <img
+                    src={user.avatar}
+                    alt={user.name}
+                    className="w-5 h-5 rounded-full object-cover border border-orange-500"
+                  />
+                ) : (
+                  <div className="w-5 h-5 rounded-full bg-orange-600 flex items-center justify-center text-[10px] font-bold text-white">
+                    {user.name.charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <span className="max-w-[80px] truncate text-zinc-200 text-[11px] font-medium hidden sm:inline">
+                  {user.name}
+                </span>
+                <ChevronDown size={11} className="text-zinc-400" />
+              </button>
+
+              {userMenuOpen && (
+                <div
+                  className="absolute right-0 top-full mt-1.5 w-56 bg-[#18181b] border border-zinc-700 rounded-lg shadow-2xl py-1 z-50 text-xs"
+                  onMouseLeave={() => setUserMenuOpen(false)}
+                >
+                  <div className="px-3 py-2 border-b border-zinc-800">
+                    <p className="font-semibold text-zinc-200 truncate">{user.name}</p>
+                    <p className="text-[11px] text-zinc-400 truncate">{user.email}</p>
+                    <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-zinc-800 text-orange-400 border border-zinc-700">
+                      {user.provider === 'google' ? 'Google OAuth 2.0' : 'Email Session'}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      logout();
+                      setUserMenuOpen(false);
+                    }}
+                    className="w-full px-3 py-2 text-left hover:bg-zinc-800 text-rose-400 flex items-center gap-2 transition-colors"
+                  >
+                    <LogOut size={13} />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={() => openAuthModal('google')}
+              className="flex items-center gap-1.5 px-3 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-zinc-500 text-zinc-200 rounded text-xs font-medium transition-all shadow-sm"
+              title="Sign in with Google OAuth 2.0 or Email"
+            >
+              <LogIn size={13} className="text-orange-400" />
+              <span>Sign In</span>
+            </button>
+          )}
+        </div>
       </div>
     </header>
   );

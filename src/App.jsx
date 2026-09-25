@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense, lazy } from 'react';
 import { useStudioStore } from './store/useStudioStore';
 import TopMenu from './components/layout/TopMenu';
 import ToolShelf from './components/layout/ToolShelf';
@@ -6,17 +6,18 @@ import ThreeViewport from './components/viewport/ThreeViewport';
 import Outliner from './components/layout/Outliner';
 import Inspector from './components/layout/Inspector';
 import DualAIPanel from './components/ai/DualAIPanel';
-import MonacoScriptEditor from './components/editor/MonacoScriptEditor';
 import TelemetryBar from './components/telemetry/TelemetryBar';
+import AuthModal from './components/auth/AuthModal';
 import { 
   Layers, 
   Sparkles, 
   Code2, 
-  SidebarClose, 
-  SidebarOpen,
   PanelRightClose,
   PanelRightOpen
 } from 'lucide-react';
+
+// Code-splitting: Lazy load the heavy Monaco editor on demand
+const MonacoScriptEditor = lazy(() => import('./components/editor/MonacoScriptEditor'));
 
 export default function App() {
   const { activeWorkspace } = useStudioStore();
@@ -57,7 +58,16 @@ export default function App() {
           {/* If in Monaco Scripting workspace and sidebar is open, show split layout */}
           {activeWorkspace === 'scripting' && activePanel === 'script' && isSidebarOpen && (
             <div className="w-1/2 h-full border-l border-zinc-800 bg-zinc-950 flex flex-col">
-              <MonacoScriptEditor />
+              <Suspense
+                fallback={
+                  <div className="flex-1 flex items-center justify-center text-xs text-zinc-500 font-mono">
+                    <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mr-2" />
+                    Loading Monaco CAD Engine...
+                  </div>
+                }
+              >
+                <MonacoScriptEditor />
+              </Suspense>
             </div>
           )}
         </main>
@@ -139,7 +149,18 @@ export default function App() {
 
               {activePanel === 'ai' && <DualAIPanel />}
 
-              {activePanel === 'script' && <MonacoScriptEditor />}
+              {activePanel === 'script' && (
+                <Suspense
+                  fallback={
+                    <div className="flex-1 flex items-center justify-center text-xs text-zinc-500 font-mono">
+                      <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mr-2" />
+                      Loading Monaco CAD Engine...
+                    </div>
+                  }
+                >
+                  <MonacoScriptEditor />
+                </Suspense>
+              )}
             </div>
           </aside>
         )}
@@ -158,6 +179,9 @@ export default function App() {
 
       {/* 3. Bottom Live Aerodynamic CFD Telemetry Bar */}
       <TelemetryBar />
+
+      {/* 4. Lightweight Authentication Modal (Google OAuth 2.0 & Email) */}
+      <AuthModal />
     </div>
   );
 }

@@ -8,4 +8,20 @@ export default defineConfig({
     react(),
     tailwindcss()
   ],
+  build: {
+    target: 'esnext',
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/three/')) {
+            return 'three-vendor';
+          }
+          if (id.includes('node_modules/lucide-react/')) {
+            return 'lucide-vendor';
+          }
+        }
+      }
+    },
+    chunkSizeWarningLimit: 1000
+  }
 })
