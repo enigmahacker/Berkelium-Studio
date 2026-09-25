@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { useStudioStore } from '../../store/useStudioStore';
 import { 
   MousePointer, 
@@ -11,19 +11,19 @@ import {
   Gauge 
 } from 'lucide-react';
 
-export default function ToolShelf() {
-  const { activeTool, setActiveTool, windTunnelParams, setWindTunnelParams } = useStudioStore();
+const tools = [
+  { id: 'select', name: 'Select Box', shortcut: 'B', icon: MousePointer },
+  { id: 'cursor', name: '3D Cursor', shortcut: 'C', icon: Target },
+  { id: 'translate', name: 'Translate / Move', shortcut: 'G', icon: Move },
+  { id: 'rotate', name: 'Rotate', shortcut: 'R', icon: RotateCw },
+  { id: 'scale', name: 'Scale', shortcut: 'S', icon: Scaling },
+  { id: 'measure', name: 'Ruler / Measure', shortcut: 'M', icon: Ruler },
+  { id: 'streamline', name: 'Streamline Emitter', shortcut: 'E', icon: Wind },
+  { id: 'probe', name: 'Aero Pressure Probe', shortcut: 'P', icon: Gauge }
+];
 
-  const tools = [
-    { id: 'select', name: 'Select Box', shortcut: 'B', icon: MousePointer },
-    { id: 'cursor', name: '3D Cursor', shortcut: 'C', icon: Target },
-    { id: 'translate', name: 'Translate / Move', shortcut: 'G', icon: Move },
-    { id: 'rotate', name: 'Rotate', shortcut: 'R', icon: RotateCw },
-    { id: 'scale', name: 'Scale', shortcut: 'S', icon: Scaling },
-    { id: 'measure', name: 'Ruler / Measure', shortcut: 'M', icon: Ruler },
-    { id: 'streamline', name: 'Streamline Emitter', shortcut: 'E', icon: Wind },
-    { id: 'probe', name: 'Aero Pressure Probe', shortcut: 'P', icon: Gauge }
-  ];
+export default function ToolShelf() {
+  const { activeTool, setActiveTool } = useStudioStore();
 
   // Global hotkeys for Blender tools
   useEffect(() => {

@@ -253,3 +253,64 @@ Section 3.1: Aerodynamic Devices
 - Ground Clearance Homologation: Minimum static ride height 60 mm.
 ============================================================`;
 }
+
+/**
+ * Execute Python aerodynamics simulation script on backend
+ */
+export async function runPythonCode(code, params = {}) {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    const res = await fetch(`${API_BASE_URL}/run/python`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, params }),
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+
+    if (res.ok) {
+      return await res.json();
+    }
+    throw new Error(`Python execution HTTP error ${res.status}`);
+  } catch (err) {
+    console.warn('[Berkelium API] Remote Python runner unavailable:', err.message);
+    return {
+      success: false,
+      source: 'offline-fallback',
+      stdout: null,
+      error: err.message
+    };
+  }
+}
+
+/**
+ * Compile and execute C++ aerodynamics kernel on backend
+ */
+export async function runCppCode(code, params = {}) {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const res = await fetch(`${API_BASE_URL}/run/cpp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, params }),
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+
+    if (res.ok) {
+      return await res.json();
+    }
+    throw new Error(`C++ execution HTTP error ${res.status}`);
+  } catch (err) {
+    console.warn('[Berkelium API] Remote C++ runner unavailable:', err.message);
+    return {
+      success: false,
+      source: 'offline-fallback',
+      stdout: null,
+      error: err.message
+    };
+  }
+}
+

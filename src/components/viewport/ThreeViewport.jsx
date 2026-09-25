@@ -1,18 +1,12 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { useStudioStore } from '../../store/useStudioStore';
 import { buildProceduralCar, updateCarGeometry, disposeCarAssembly } from '../../services/proceduralCar';
 import { 
-  Wind, 
   Activity, 
-  Layers, 
-  Maximize2, 
-  Camera, 
-  AlertTriangle,
-  Compass,
-  Eye
+  AlertTriangle
 } from 'lucide-react';
 
 export default function ThreeViewport() {
@@ -27,13 +21,12 @@ export default function ThreeViewport() {
     shadingMode,
     windTunnelParams,
     carParams,
-    telemetry,
-    aiState,
     sceneVisibility,
     snapshotTriggerTime,
     setCapturedSnapshots,
     scriptExecutionVersion,
-    addScriptLog
+    addScriptLog,
+    customMeshModel
   } = useStudioStore();
 
   // Internal viewport telemetry HUD
@@ -52,6 +45,7 @@ export default function ThreeViewport() {
     controls: null,
     transformControls: null,
     carGroup: null,
+    customMeshInstance: null,
     tunnelGroup: null,
     streamlinesMesh: null,
     streamlineData: null,
@@ -466,6 +460,9 @@ export default function ThreeViewport() {
       }
       controls.dispose();
       transformControls.dispose();
+      if (threeRef.current.customMeshInstance && threeRef.current.scene) {
+        threeRef.current.scene.remove(threeRef.current.customMeshInstance);
+      }
       if (threeRef.current.carGroup) {
         disposeCarAssembly(threeRef.current.carGroup);
       }
@@ -502,14 +499,82 @@ export default function ThreeViewport() {
     controls.update();
   }, [cameraView]);
 
-  // 3. Handle Active Tool Mode in TransformControls
+  // 3. Handle Custom 3D Mesh Model Import (.obj, .stl, .gltf)
   useEffect(() => {
-    const { transformControls, carGroup } = threeRef.current;
+    const { scene, transformControls, carGroup } = threeRef.current;
+    if (!scene) return;
+
+    if (customMeshModel) {
+      // Hide default procedural car assembly
+      if (carGroup) {
+        carGroup.visible = false;
+      }
+
+      // Remove existing custom mesh instance if it changed
+      if (threeRef.current.customMeshInstance && threeRef.current.customMeshInstance !== customMeshModel) {
+        scene.remove(threeRef.current.customMeshInstance);
+      }
+
+      scene.add(customMeshModel);
+      threeRef.current.customMeshInstance = customMeshModel;
+
+      // Fit and position inside wind tunnel test section
+      const bbox = new THREE.Box3().setFromObject(customMeshModel);
+      const size = new THREE.Vector3();
+      bbox.getSize(size);
+      const maxDim = Math.max(size.x, size.y, size.z);
+
+      if (maxDim > 12.0 || maxDim < 0.5) {
+        const targetDim = 4.2;
+        const scaleFactor = targetDim / (maxDim || 1);
+        customMeshModel.scale.set(scaleFactor, scaleFactor, scaleFactor);
+      }
+
+      // Re-center model on ground level
+      const updatedBox = new THREE.Box3().setFromObject(customMeshModel);
+      const center = new THREE.Vector3();
+      updatedBox.getCenter(center);
+      customMeshModel.position.x = -center.x;
+      customMeshModel.position.z = -center.z;
+      customMeshModel.position.y = -updatedBox.min.y + 0.05;
+
+      // Update triangle count in HUD
+      let triCount = 0;
+      customMeshModel.traverse((obj) => {
+        if (obj.isMesh && obj.geometry) {
+          if (obj.geometry.index) {
+            triCount += obj.geometry.index.count / 3;
+          } else if (obj.geometry.attributes.position) {
+            triCount += obj.geometry.attributes.position.count / 3;
+          }
+        }
+      });
+      setTriangles(Math.round(triCount));
+
+      // Attach transform controls if transform tool is active
+      if (['translate', 'rotate', 'scale'].includes(activeTool) && transformControls) {
+        transformControls.attach(customMeshModel);
+      }
+    } else {
+      if (threeRef.current.customMeshInstance) {
+        scene.remove(threeRef.current.customMeshInstance);
+        threeRef.current.customMeshInstance = null;
+      }
+      if (carGroup) {
+        carGroup.visible = sceneVisibility.carAssembly !== false;
+      }
+    }
+  }, [customMeshModel, activeTool, sceneVisibility.carAssembly]);
+
+  // 4. Handle Active Tool Mode in TransformControls
+  useEffect(() => {
+    const { transformControls, carGroup, customMeshInstance } = threeRef.current;
     if (!transformControls) return;
 
-    if (['translate', 'rotate', 'scale'].includes(activeTool) && carGroup) {
+    const target = customMeshInstance || carGroup;
+    if (['translate', 'rotate', 'scale'].includes(activeTool) && target) {
       transformControls.setMode(activeTool);
-      transformControls.attach(carGroup);
+      transformControls.attach(target);
       transformControls.enabled = true;
     } else {
       transformControls.detach();
@@ -517,20 +582,24 @@ export default function ThreeViewport() {
     }
   }, [activeTool]);
 
-  // 4. Update Car Geometry Dynamically when carParams or shadingMode Change
+  // 5. Update Car Geometry Dynamically when carParams or shadingMode Change
   useEffect(() => {
-    const { carGroup } = threeRef.current;
-    if (carGroup) {
+    const { carGroup, customMeshInstance } = threeRef.current;
+    if (carGroup && !customMeshInstance) {
       updateCarGeometry(carGroup, carParams, shadingMode);
     }
   }, [carParams, shadingMode]);
 
-  // 5. Update Visibility of Scene Objects
+  // 6. Update Visibility of Scene Objects
   useEffect(() => {
-    const { scene, carGroup, tunnelGroup, streamlinesMesh } = threeRef.current;
+    const { scene, carGroup, customMeshInstance, tunnelGroup, streamlinesMesh } = threeRef.current;
     if (!scene) return;
 
-    if (carGroup) {
+    if (customMeshInstance) {
+      customMeshInstance.visible = sceneVisibility.carAssembly !== false;
+    }
+
+    if (carGroup && !customMeshInstance) {
       carGroup.visible = sceneVisibility.carAssembly !== false;
       const chassis = carGroup.getObjectByName('Chassis');
       if (chassis) chassis.visible = sceneVisibility.chassis !== false;
@@ -617,8 +686,10 @@ export default function ThreeViewport() {
   // Handle Raycasting for Aero Pressure Probe Tool
   const handleCanvasClick = (e) => {
     if (activeTool !== 'probe') return;
-    const { camera, carGroup } = threeRef.current;
-    if (!camera || !carGroup || !containerRef.current) return;
+    const { camera, carGroup, customMeshInstance } = threeRef.current;
+    if (!camera || !containerRef.current) return;
+    const targetGroup = customMeshInstance || carGroup;
+    if (!targetGroup) return;
 
     const rect = containerRef.current.getBoundingClientRect();
     const mouse = new THREE.Vector2(
@@ -628,7 +699,7 @@ export default function ThreeViewport() {
 
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(mouse, camera);
-    const intersects = raycaster.intersectObjects(carGroup.children, true);
+    const intersects = raycaster.intersectObjects(targetGroup.children, true);
 
     if (intersects.length > 0) {
       const hit = intersects[0];

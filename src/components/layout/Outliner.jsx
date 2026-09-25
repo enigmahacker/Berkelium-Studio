@@ -1,8 +1,6 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useStudioStore } from '../../store/useStudioStore';
 import { 
-  Folder, 
-  FolderOpen, 
   Box, 
   Eye, 
   EyeOff, 

@@ -31,7 +31,9 @@ export default function TopMenu() {
     setAiState,
     shadingMode,
     setShadingMode,
-    telemetry
+    telemetry,
+    openProjectLauncher,
+    currentProject
   } = useStudioStore();
 
   const { user, isAuthenticated, openAuthModal, logout } = useAuthStore();
@@ -214,6 +216,19 @@ export default function TopMenu() {
                 onClick={(e) => e.stopPropagation()}
                 className="absolute left-0 top-8 w-56 bg-zinc-900 border border-zinc-700/80 rounded shadow-2xl py-1 z-50 text-xs"
               >
+                <button
+                  onClick={() => {
+                    openProjectLauncher();
+                    setActiveMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-orange-500 hover:text-white flex items-center justify-between text-orange-400 font-semibold"
+                >
+                  <span className="flex items-center gap-2">
+                    <FolderOpen size={13} /> Project & Working Dir...
+                  </span>
+                  <span className="text-[10px] text-zinc-500 font-mono">Open</span>
+                </button>
+                <div className="border-t border-zinc-800 my-1" />
                 <button
                   onClick={() => {
                     fileInputRef.current?.click();

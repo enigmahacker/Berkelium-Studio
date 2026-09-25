@@ -1,22 +1,17 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useStudioStore } from '../../store/useStudioStore';
 import { sendChatMessage, uploadImageOcr, uploadPdfOcr } from '../../services/api';
-import { 
-  Sparkles, 
-  ShieldAlert, 
-  Send, 
-  Upload, 
-  FileText, 
-  CheckCircle2, 
-  AlertTriangle, 
-  RotateCcw, 
-  Wand2, 
-  Activity, 
-  Layers, 
-  Camera, 
-  Check, 
-  ArrowRight,
-  Maximize2
+import {
+  Sparkles,
+  ShieldAlert,
+  Send,
+  FileText,
+  CheckCircle2,
+  AlertTriangle,
+  RotateCcw,
+  Wand2,
+  Paperclip,
+  Check
 } from 'lucide-react';
 
 export default function DualAIPanel() {
@@ -34,9 +29,9 @@ export default function DualAIPanel() {
   const [aiBrainTab, setAiBrainTab] = useState('builder'); // 'builder' | 'auditor'
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
-  const [activeSnapshotModal, setActiveSnapshotModal] = useState(null);
+  const [appliedIndex, setAppliedIndex] = useState(null);
   const chatScrollRef = useRef(null);
-  const ocrInputRef = useRef(null);
+  const fileInputRef = useRef(null);
   const pdfInputRef = useRef(null);
 
   // Auto-scroll chat
@@ -46,7 +41,14 @@ export default function DualAIPanel() {
     }
   }, [aiState.chatHistory]);
 
-  // Handle Chat Submission to Spatial Builder
+  // Quick Action Prompts
+  const quickPrompts = [
+    { label: 'Monza Low Drag', prompt: 'Configure an ultra-low drag setup for high top speed, minimizing Cd and induced drag' },
+    { label: 'High Downforce', prompt: 'Tune for maximum aerodynamic downforce for high-speed cornering stability' },
+    { label: 'Check Stall', prompt: 'Audit rear wing and underfloor diffuser angles for aerodynamic flow separation' }
+  ];
+
+  // Send Chat message
   const handleSendMessage = async (textToSend) => {
     const prompt = textToSend || inputText;
     if (!prompt.trim() || loading) return;
@@ -65,19 +67,17 @@ export default function DualAIPanel() {
       const result = await sendChatMessage(prompt, carParams);
       const reply = result.response;
 
-      // Check if reply has JSON car parameters block to auto-suggest
       const jsonMatch = reply.match(/```json\s*([\s\S]*?)\s*```/);
       let parsedParams = null;
       if (jsonMatch) {
         try {
           parsedParams = JSON.parse(jsonMatch[1]);
-        } catch (e) {
-          console.warn('Could not parse JSON from AI response', e);
+        } catch (_e) {
+          // ignore json parse error
         }
       }
 
       setAiState((prev) => ({
-        isBuilding: false,
         chatHistory: [
           ...prev.chatHistory,
           {
@@ -86,406 +86,357 @@ export default function DualAIPanel() {
             text: reply,
             suggestedParams: parsedParams
           }
-        ]
+        ],
+        isBuilding: false
       }));
 
-      // Automatically apply suggested parameters if available
-      if (parsedParams) {
-        setCarParams(parsedParams);
-        addScriptLog(`[Spatial Builder] Auto-applied AI geometric parameters: ${JSON.stringify(parsedParams)}`);
-      }
+      addScriptLog(`[Spatial Builder] Synthesized aerodynamic recommendations for: "${prompt.slice(0, 35)}..."`);
     } catch (err) {
-      setAiState({ isBuilding: false });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // OCR Blueprint upload
-  const handleOcrFile = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setLoading(true);
-    setAiState({ isBuilding: true });
-
-    try {
-      const res = await uploadImageOcr(file);
       setAiState((prev) => ({
-        isBuilding: false,
         chatHistory: [
           ...prev.chatHistory,
-          { sender: 'user', role: 'Engineer', text: `Uploaded CAD Blueprint: ${file.name}` },
-          { sender: 'ai', role: 'Spatial Builder', text: `Extracted CAD blueprint specifications:\n${res.text}` }
-        ]
+          { sender: 'ai', role: 'Spatial Builder', text: `Connection Error: ${err.message}` }
+        ],
+        isBuilding: false
       }));
-    } catch (err) {
-      setAiState({ isBuilding: false });
     } finally {
       setLoading(false);
     }
   };
 
-  // Trigger Multi-Angle Visual Capture & Audit
+  // Run Neural Audit
   const handleTriggerAudit = () => {
-    setAiState({ isAuditing: true });
+    setLoading(true);
     triggerVisualSnapshot();
 
     setTimeout(() => {
-      // Calculate audit score based on stall & parameters
-      let score = 95;
-      if (carParams.rearWingAOA > 14.5) score -= 18;
-      if (carParams.diffuserAngle > 12.0) score -= 14;
-      if (carParams.groundClearance < 0.05) score -= 8;
+      const hasStall = telemetry.flowSeparationDetected;
+      const score = telemetry.homologationScore || 92;
 
-      setAiState({
-        isAuditing: false,
-        auditScore: Math.max(45, score),
-        auditReport: {
-          timestamp: new Date().toLocaleTimeString(),
-          stabilityScore: score > 80 ? 'Optimal (High-G Cohesive)' : 'Degraded (Turbulent)',
-          watertight: '100% Manifold Mesh',
-          liftToDrag: telemetry.liftToDragRatio
-        }
-      });
-      addScriptLog(`[Neural Auditor] Multi-angle visual inspection complete. Homologation Score: ${score}%`);
-    }, 1500);
-  };
-
-  // One-Click "Auto-Fix & Refine"
-  const handleAutoFix = () => {
-    setLoading(true);
-    setAiState({ isAuditing: true });
-
-    setTimeout(() => {
-      // Correct parameters to optimal laminar aerodynamic envelope
-      const refinedParams = {
-        rearWingAOA: 11.2,
-        diffuserAngle: 9.5,
-        splitterLength: 0.28,
-        groundClearance: 0.075
+      const report = {
+        score,
+        complianceStatus: score >= 90 ? 'Passed Homologation' : 'Review Required',
+        timestamp: new Date().toLocaleTimeString(),
+        issues: hasStall
+          ? [
+              {
+                title: 'Rear Wing Boundary Layer Stall',
+                detail: `Wing AOA is ${carParams.rearWingAOA}° (exceeds 14.5° stall threshold). Flow detachment detected on suction surface.`,
+                suggestedFix: { rearWingAOA: 11.2 }
+              }
+            ]
+          : [],
+        checks: [
+          { name: 'Mesh Watertightness & Normals', passed: true },
+          { name: 'Front Splitter Ground Seal', passed: carParams.groundClearance >= 0.05 },
+          { name: 'Diffuser Expansion Ramp', passed: carParams.diffuserAngle <= 12.0 },
+          { name: 'Induced Vortex Minimization', passed: !hasStall }
+        ]
       };
 
-      setCarParams(refinedParams);
-
       setAiState((prev) => ({
+        auditScore: score,
+        auditReport: report,
         isAuditing: false,
-        auditScore: 98,
-        defectPins: [],
         chatHistory: [
           ...prev.chatHistory,
           {
-            sender: 'ai',
+            sender: 'auditor',
             role: 'Neural Auditor',
-            text: 'One-Click Auto-Refine Applied: Rear wing AOA corrected to 11.2° (eliminates stall). Diffuser ramp set to 9.5° for attached boundary layer recovery. Homologation score upgraded to 98%.'
+            text: `### Neural Visual & Aerodynamic Audit Complete\n- **Homologation Score**: **${score}/100**\n- **Boundary Layer Status**: ${hasStall ? '⚠️ Flow Separation Detected' : '✅ Attached Laminar Flow'}\n${hasStall ? '\nRecommended Action: Click "Auto-Fix & Refine" to eliminate stall.' : ''}`,
+            report
           }
         ]
       }));
 
-      addScriptLog('[Neural Auditor] Applied Auto-Fix & Refine. All boundary layer detachments eliminated.');
+      addScriptLog(`[Neural Auditor] Multi-angle visual audit completed. Compliance score: ${score}/100`);
       setLoading(false);
-    }, 1000);
+    }, 700);
   };
 
-  const samplePrompts = [
-    'Monza low-drag setup',
-    'High downforce endurance kit',
-    'Fix boundary layer stall',
-    'Tune diffuser for ground effect'
-  ];
+  // Auto-Fix & Refine
+  const handleAutoFix = (fixParams) => {
+    const patch = fixParams || { rearWingAOA: 11.2, diffuserAngle: 9.2 };
+    setCarParams(patch);
+    addScriptLog(`[Neural Auditor] Auto-Fix applied: Adjusted geometry to eliminate boundary layer stall.`);
+    setAiState((prev) => ({
+      chatHistory: [
+        ...prev.chatHistory,
+        {
+          sender: 'system',
+          role: 'System',
+          text: `Applied Auto-Fix: Rear wing angle of attack set to ${patch.rearWingAOA || 11.2}° and diffuser ramp to ${patch.diffuserAngle || 9.2}°.`
+        }
+      ]
+    }));
+  };
+
+  // Upload blueprint OCR
+  const handleOcrFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLoading(true);
+    addScriptLog(`Uploading sketch ${file.name} to OCR endpoint...`);
+    try {
+      const res = await uploadImageOcr(file);
+      handleSendMessage(`Here is the technical specification extracted from blueprint:\n\n${res.text}\n\nPlease adapt vehicle geometry to comply.`);
+    } catch (err) {
+      alert(`OCR failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Upload PDF spec
+  const handlePdfFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLoading(true);
+    addScriptLog(`Uploading PDF ${file.name} to PDF-OCR endpoint...`);
+    try {
+      const res = await uploadPdfOcr(file);
+      handleSendMessage(`Extracted from engineering PDF document:\n\n${res.text}\n\nOptimize vehicle aerodynamics to match these constraints.`);
+    } catch (err) {
+      alert(`PDF parsing failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
-    <div className="h-full flex flex-col bg-zinc-950 border-l border-zinc-800 text-xs select-none">
-      {/* Hidden File Inputs */}
-      <input
-        type="file"
-        ref={ocrInputRef}
-        onChange={handleOcrFile}
-        accept="image/*"
-        className="hidden"
-      />
+    <div className="w-full h-full flex flex-col bg-[#0b0b10] border-l border-[#1e293b] select-text">
+      {/* Header with Segmented Switch */}
+      <div className="p-3 bg-[#0f172a] border-b border-[#1e293b] flex items-center justify-between">
+        <div className="flex bg-[#0b0b10] p-0.5 rounded-lg border border-zinc-800">
+          <button
+            onClick={() => setAiBrainTab('builder')}
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all ${
+              aiBrainTab === 'builder'
+                ? 'bg-orange-600 text-white shadow-sm'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <Sparkles size={12} />
+            <span>Spatial Builder</span>
+          </button>
+          <button
+            onClick={() => setAiBrainTab('auditor')}
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all ${
+              aiBrainTab === 'auditor'
+                ? 'bg-amber-600 text-white shadow-sm'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <ShieldAlert size={12} />
+            <span>Neural Auditor</span>
+          </button>
+        </div>
 
-      {/* Dual AI Header Tabs */}
-      <div className="flex border-b border-zinc-800 bg-zinc-900/60 p-1">
         <button
-          onClick={() => setAiBrainTab('builder')}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded transition-all ${
-            aiBrainTab === 'builder'
-              ? 'bg-orange-500 text-white font-semibold shadow'
-              : 'text-zinc-400 hover:text-zinc-200'
-          }`}
+          onClick={aiBrainTab === 'auditor' ? handleTriggerAudit : () => handleSendMessage('Recommend optimal aero')}
+          disabled={loading}
+          className="text-xs px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 flex items-center gap-1 transition-colors"
         >
-          <Sparkles size={13} />
-          <span>Spatial Builder</span>
-        </button>
-
-        <button
-          onClick={() => setAiBrainTab('auditor')}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded transition-all ${
-            aiBrainTab === 'auditor'
-              ? 'bg-amber-500 text-white font-semibold shadow'
-              : 'text-zinc-400 hover:text-zinc-200'
-          }`}
-        >
-          <ShieldAlert size={13} />
-          <span>Neural Auditor</span>
-          {aiState.defectPins.length > 0 && (
-            <span className="w-4 h-4 rounded-full bg-red-600 text-white text-[9px] font-bold flex items-center justify-center">
-              {aiState.defectPins.length}
-            </span>
-          )}
+          {aiBrainTab === 'auditor' ? <Wand2 size={12} /> : <RotateCcw size={12} />}
+          <span>{aiBrainTab === 'auditor' ? 'Run Audit' : 'Suggest'}</span>
         </button>
       </div>
 
-      {/* TAB 1: SPATIAL BUILDER */}
-      {aiBrainTab === 'builder' && (
-        <div className="flex-1 flex flex-col min-h-0">
-          {/* Chat Messages */}
-          <div ref={chatScrollRef} className="flex-1 p-3 overflow-y-auto space-y-3 custom-scrollbar">
-            {aiState.chatHistory.map((msg, idx) => (
-              <div
-                key={idx}
-                className={`p-2.5 rounded-lg text-[11px] leading-relaxed ${
-                  msg.sender === 'user'
-                    ? 'bg-zinc-800 border border-zinc-700 text-zinc-100 ml-4'
-                    : 'bg-zinc-900/90 border border-zinc-800 text-zinc-200 mr-2 shadow-sm'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1 font-mono text-[10px] text-zinc-400">
-                  <span className="font-semibold text-orange-400">{msg.role}</span>
-                  <span>{msg.sender === 'user' ? 'You' : 'Model'}</span>
-                </div>
-                <div className="whitespace-pre-wrap">{msg.text}</div>
+      {/* Quick Prompts Bar */}
+      <div className="px-3 py-2 bg-[#0d1117] border-b border-[#1e293b] flex items-center gap-1.5 overflow-x-auto text-[11px]">
+        {quickPrompts.map((qp, idx) => (
+          <button
+            key={idx}
+            onClick={() => handleSendMessage(qp.prompt)}
+            className="whitespace-nowrap px-2.5 py-1 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 hover:text-white border border-zinc-700 transition-all shrink-0"
+          >
+            {qp.label}
+          </button>
+        ))}
+      </div>
 
-                {/* Suggested parameters action */}
-                {msg.suggestedParams && (
-                  <button
-                    onClick={() => setCarParams(msg.suggestedParams)}
-                    className="mt-2 flex items-center gap-1.5 px-2.5 py-1 bg-orange-600/90 hover:bg-orange-500 text-white rounded text-[10px] font-semibold transition-all"
-                  >
-                    <Check size={11} />
-                    <span>Apply Parameters to 3D Model</span>
-                  </button>
-                )}
-              </div>
-            ))}
-
-            {loading && (
-              <div className="flex items-center gap-2 text-zinc-500 text-[11px] font-mono p-2">
-                <span className="w-2 h-2 rounded-full bg-orange-500 animate-ping" />
-                <span>Synthesizing aerodynamic geometry...</span>
-              </div>
-            )}
-          </div>
-
-          {/* Prompt Suggestion Chips */}
-          <div className="px-3 py-1.5 flex gap-1.5 overflow-x-auto border-t border-zinc-800/80 custom-scrollbar">
-            {samplePrompts.map((s, idx) => (
-              <button
-                key={idx}
-                onClick={() => handleSendMessage(s)}
-                className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 transition-all"
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-
-          {/* Input Bar */}
-          <div className="p-2 border-t border-zinc-800 bg-zinc-900/80 flex items-center gap-1.5">
-            <button
-              onClick={() => ocrInputRef.current?.click()}
-              className="p-1.5 text-zinc-400 hover:text-zinc-200 bg-zinc-800/80 hover:bg-zinc-800 rounded"
-              title="Upload CAD Blueprint OCR"
-            >
-              <FileText size={15} />
-            </button>
-
-            <input
-              type="text"
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-              placeholder="Ask Spatial Builder (e.g. 'Optimize wing for Le Mans')..."
-              className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-zinc-200 text-xs focus:outline-none focus:border-orange-500"
-            />
-
-            <button
-              onClick={() => handleSendMessage()}
-              disabled={loading || !inputText.trim()}
-              className="p-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white rounded transition-all"
-            >
-              <Send size={14} />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 2: NEURAL RENDERING AUDITOR */}
-      {aiBrainTab === 'auditor' && (
-        <div className="flex-1 flex flex-col p-3 overflow-y-auto space-y-4 custom-scrollbar">
-          {/* Audit Action Header */}
-          <div className="flex items-center justify-between">
-            <div className="font-semibold text-zinc-200 flex items-center gap-1.5">
-              <Camera size={14} className="text-amber-400" />
-              <span>Multi-Angle Visual Audit</span>
+      {/* Main Message Stream */}
+      <div ref={chatScrollRef} className="flex-1 p-3 overflow-y-auto space-y-3">
+        {aiState.chatHistory.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-3">
+            <div className="w-10 h-10 rounded-xl bg-orange-600/20 border border-orange-500/30 text-orange-400 flex items-center justify-center">
+              <Sparkles className="w-5 h-5" />
             </div>
-            <button
-              onClick={handleTriggerAudit}
-              disabled={aiState.isAuditing}
-              className="flex items-center gap-1 px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded font-semibold text-xs shadow transition-all active:scale-95"
-            >
-              <RotateCcw size={12} className={aiState.isAuditing ? 'animate-spin' : ''} />
-              <span>{aiState.isAuditing ? 'Auditing...' : 'Run Audit'}</span>
-            </button>
+            <div>
+              <h4 className="text-xs font-semibold text-zinc-200">Berkelium Dual-Brain AI</h4>
+              <p className="text-[11px] text-zinc-400 mt-1 max-w-[240px]">
+                Describe your engineering requirements, upload a blueprint, or ask to audit flow detachment.
+              </p>
+            </div>
           </div>
+        ) : (
+          aiState.chatHistory.map((msg, index) => {
+            const isUser = msg.sender === 'user';
+            const isAuditor = msg.sender === 'auditor';
+            const isSystem = msg.sender === 'system';
 
-          {/* Visual Captures Gallery (4-angles) */}
-          <div className="space-y-1.5">
-            <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider block">
-              Neural Inspection Views
-            </span>
-            <div className="grid grid-cols-2 gap-1.5">
-              {[
-                { key: 'persp', label: 'Perspective View' },
-                { key: 'top', label: 'Top Aero Deck' },
-                { key: 'side', label: 'Side Profile' },
-                { key: 'front', label: 'Front Stagnation' }
-              ].map(({ key, label }) => (
-                <div
-                  key={key}
-                  onClick={() => capturedSnapshots[key] && setActiveSnapshotModal(capturedSnapshots[key])}
-                  className="relative aspect-video bg-zinc-900 rounded border border-zinc-800 overflow-hidden cursor-pointer group"
-                >
-                  {capturedSnapshots[key] ? (
-                    <img
-                      src={capturedSnapshots[key]}
-                      alt={label}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center text-zinc-600 text-[10px]">
-                      <Camera size={16} className="mb-1 opacity-50" />
-                      <span>{label}</span>
-                    </div>
-                  )}
-                  <span className="absolute bottom-1 left-1.5 px-1 bg-zinc-950/80 text-[9px] font-mono text-zinc-400 rounded">
-                    {label}
+            if (isSystem) {
+              return (
+                <div key={index} className="flex justify-center my-1">
+                  <span className="text-[11px] px-2.5 py-1 rounded-full bg-zinc-800/70 border border-zinc-700 text-emerald-400 font-mono">
+                    ✓ {msg.text}
                   </span>
                 </div>
-              ))}
-            </div>
-          </div>
+              );
+            }
 
-          {/* Scorecard */}
-          <div className="bg-zinc-900/90 p-3 rounded-lg border border-zinc-800 space-y-2.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-mono text-zinc-400 uppercase">
-                Homologation Compliance
-              </span>
-              <span
-                className={`font-mono font-bold text-sm ${
-                  aiState.auditScore >= 90
-                    ? 'text-emerald-400'
-                    : aiState.auditScore >= 75
-                    ? 'text-amber-400'
-                    : 'text-red-400'
-                }`}
-              >
-                {aiState.auditScore}%
-              </span>
-            </div>
-
-            {/* Score Progress Bar */}
-            <div className="w-full h-2 bg-zinc-950 rounded-full overflow-hidden">
+            return (
               <div
-                className={`h-full transition-all duration-500 ${
-                  aiState.auditScore >= 90
-                    ? 'bg-emerald-500'
-                    : aiState.auditScore >= 75
-                    ? 'bg-amber-500'
-                    : 'bg-red-500'
-                }`}
-                style={{ width: `${aiState.auditScore}%` }}
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 pt-1 text-[10px] font-mono">
-              <div className="bg-zinc-950 p-1.5 rounded border border-zinc-800/80">
-                <span className="text-zinc-500 block">Stability Index</span>
-                <span className="text-zinc-200 font-bold">
-                  {aiState.auditReport?.stabilityScore || '89% (Stable)'}
+                key={index}
+                className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} space-y-1`}
+              >
+                {/* Sender badge */}
+                <span className="text-[10px] text-zinc-500 px-1 font-mono uppercase tracking-wider">
+                  {msg.role || msg.sender}
                 </span>
-              </div>
-              <div className="bg-zinc-950 p-1.5 rounded border border-zinc-800/80">
-                <span className="text-zinc-500 block">Mesh Watertight</span>
-                <span className="text-emerald-400 font-bold">100% Manifold</span>
-              </div>
-            </div>
-          </div>
 
-          {/* Detected Defects List */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-mono text-zinc-400 uppercase">
-                Detected Aerodynamic Defects ({aiState.defectPins.length})
-              </span>
-            </div>
+                {/* Message bubble */}
+                <div
+                  className={`p-3 rounded-xl max-w-[92%] text-xs leading-relaxed ${
+                    isUser
+                      ? 'bg-blue-600 text-white rounded-tr-none'
+                      : isAuditor
+                      ? 'bg-[#1e1b4b] border border-indigo-700/50 text-indigo-100 rounded-tl-none'
+                      : 'bg-[#18181b] border border-zinc-800 text-zinc-200 rounded-tl-none'
+                  }`}
+                >
+                  <div className="whitespace-pre-line font-sans">{msg.text}</div>
 
-            {aiState.defectPins.length === 0 ? (
-              <div className="p-3 bg-emerald-950/20 border border-emerald-500/30 rounded text-emerald-300 text-[11px] flex items-center gap-2">
-                <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
-                <span>Zero critical aerodynamic defects detected. High flow adherence.</span>
-              </div>
-            ) : (
-              <div className="space-y-1.5">
-                {aiState.defectPins.map((pin) => (
-                  <div
-                    key={pin.id}
-                    className="p-2 rounded bg-zinc-900 border border-red-500/40 space-y-1"
-                  >
-                    <div className="flex items-center gap-1.5 text-red-400 font-semibold text-xs">
-                      <AlertTriangle size={13} className="shrink-0" />
-                      <span>{pin.title}</span>
+                  {/* If AI suggested parameters, offer 1-click apply */}
+                  {msg.suggestedParams && (
+                    <div className="mt-2.5 pt-2 border-t border-zinc-700/60 flex items-center justify-between">
+                      <span className="text-[11px] text-zinc-400 font-mono">
+                        AOA: {msg.suggestedParams.rearWingAOA || 11.5}° • Diff: {msg.suggestedParams.diffuserAngle || 9}°
+                      </span>
+                      <button
+                        onClick={() => {
+                          setCarParams(msg.suggestedParams);
+                          setAppliedIndex(index);
+                          addScriptLog(`[Spatial Builder] Applied AI parameters to 3D Viewport.`);
+                        }}
+                        className={`px-2.5 py-1 rounded text-[11px] font-semibold flex items-center gap-1 transition-all ${
+                          appliedIndex === index
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-orange-600 hover:bg-orange-500 text-white shadow'
+                        }`}
+                      >
+                        {appliedIndex === index ? (
+                          <>
+                            <Check size={11} />
+                            <span>Applied</span>
+                          </>
+                        ) : (
+                          <>
+                            <Wand2 size={11} />
+                            <span>Apply to 3D</span>
+                          </>
+                        )}
+                      </button>
                     </div>
-                    <p className="text-[11px] text-zinc-300 leading-snug">{pin.description}</p>
-                  </div>
-                ))}
+                  )}
+
+                  {/* If Auditor found issues, offer 1-click Auto-Fix */}
+                  {msg.report && msg.report.issues?.length > 0 && (
+                    <div className="mt-2.5 pt-2 border-t border-indigo-700/40 space-y-2">
+                      {msg.report.issues.map((iss, i) => (
+                        <div key={i} className="flex items-start justify-between gap-2 p-2 rounded bg-rose-950/40 border border-rose-800/40">
+                          <div>
+                            <p className="text-[11px] font-semibold text-rose-300">{iss.title}</p>
+                            <p className="text-[10px] text-zinc-400">{iss.detail}</p>
+                          </div>
+                          <button
+                            onClick={() => handleAutoFix(iss.suggestedFix)}
+                            className="shrink-0 px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded text-[10px] font-bold"
+                          >
+                            Auto-Fix
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            )}
+            );
+          })
+        )}
+
+        {loading && (
+          <div className="flex items-center gap-2 p-2.5 text-xs text-orange-400 bg-orange-950/20 border border-orange-800/30 rounded-lg">
+            <div className="w-3.5 h-3.5 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />
+            <span className="font-mono text-[11px]">Reasoning aerodynamic geometry...</span>
           </div>
+        )}
+      </div>
 
-          {/* One-Click Auto-Fix & Refine */}
-          <button
-            onClick={handleAutoFix}
-            disabled={loading || aiState.defectPins.length === 0}
-            className="w-full flex items-center justify-center gap-2 py-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 disabled:opacity-40 text-white rounded font-bold text-xs shadow-lg transition-all active:scale-98"
-          >
-            <Wand2 size={14} />
-            <span>Auto-Fix & Refine Aero Balance</span>
-          </button>
-        </div>
-      )}
-
-      {/* Snapshot Enlarge Modal */}
-      {activeSnapshotModal && (
-        <div
-          onClick={() => setActiveSnapshotModal(null)}
-          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-6 backdrop-blur-sm"
+      {/* Bottom Input Area */}
+      <div className="p-2.5 bg-[#0f172a] border-t border-[#1e293b] space-y-2">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSendMessage();
+          }}
+          className="flex items-center gap-1.5"
         >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="relative max-w-3xl w-full bg-zinc-950 border border-zinc-700 rounded-lg overflow-hidden shadow-2xl"
+          {/* File attachments */}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white transition-colors"
+            title="Attach Blueprint Image (OCR)"
           >
-            <img src={activeSnapshotModal} alt="Capture" className="w-full block" />
-            <button
-              onClick={() => setActiveSnapshotModal(null)}
-              className="absolute top-2 right-2 px-2.5 py-1 bg-zinc-900/80 hover:bg-zinc-800 text-white rounded text-xs"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
+            <Paperclip size={14} />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => pdfInputRef.current?.click()}
+            className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white transition-colors"
+            title="Attach Tech Spec (PDF)"
+          >
+            <FileText size={14} />
+          </button>
+
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleOcrFile}
+            accept="image/*"
+            className="hidden"
+          />
+          <input
+            type="file"
+            ref={pdfInputRef}
+            onChange={handlePdfFile}
+            accept=".pdf"
+            className="hidden"
+          />
+
+          <input
+            type="text"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            placeholder={
+              aiBrainTab === 'builder'
+                ? 'Ask Builder to design or tune car aero...'
+                : 'Ask Auditor to inspect flow separation...'
+            }
+            className="flex-1 bg-[#0b0b10] border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-orange-500 transition-colors"
+          />
+
+          <button
+            type="submit"
+            disabled={!inputText.trim() || loading}
+            className="p-2 rounded-lg bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white transition-all shadow-sm"
+          >
+            <Send size={14} />
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

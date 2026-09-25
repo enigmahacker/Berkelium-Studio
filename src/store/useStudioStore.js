@@ -1,5 +1,10 @@
 import { create } from 'zustand';
 import { calculateAerodynamics } from '../services/aeroMath';
+import {
+  DEFAULT_PYTHON_SCRIPT,
+  DEFAULT_CPP_SCRIPT,
+  DEFAULT_JS_SCRIPT
+} from '../services/defaultCodeTemplates';
 
 export const useStudioStore = create((set, get) => {
   const initialWind = {
@@ -221,6 +226,39 @@ carGroup.add(rightVG);
       set((state) => ({
         scriptOutputLog: [...state.scriptOutputLog.slice(-49), msg]
       })),
-    clearScriptLogs: () => set({ scriptOutputLog: [] })
+    clearScriptLogs: () => set({ scriptOutputLog: [] }),
+
+    // Real Project & Working Directory state
+    isProjectLauncherOpen: !localStorage.getItem('berkelium_skip_launcher'),
+    openProjectLauncher: () => set({ isProjectLauncherOpen: true }),
+    closeProjectLauncher: () => set({ isProjectLauncherOpen: false }),
+
+    currentProject: {
+      name: 'Le Mans Hypercar Prototype (LMP1)',
+      path: '/projects/hypercar_aerodynamics',
+      files: [
+        { name: 'simulation.py', language: 'python', type: 'script' },
+        { name: 'aerodynamics_solver.cpp', language: 'cpp', type: 'kernel' },
+        { name: 'generate_car.js', language: 'javascript', type: 'cad' }
+      ]
+    },
+    setProject: (project) => set({ currentProject: project, isProjectLauncherOpen: false }),
+
+    // Multi-Language Code Editor Files (Python, C++, JavaScript)
+    activeCodeFile: 'simulation.py',
+    setActiveCodeFile: (fileName) => set({ activeCodeFile: fileName }),
+    codeFiles: {
+      'simulation.py': DEFAULT_PYTHON_SCRIPT,
+      'aerodynamics_solver.cpp': DEFAULT_CPP_SCRIPT,
+      'generate_car.js': DEFAULT_JS_SCRIPT
+    },
+    updateCodeFileContent: (fileName, content) =>
+      set((state) => ({
+        codeFiles: { ...state.codeFiles, [fileName]: content }
+      })),
+
+    // Real imported 3D Mesh
+    customMeshModel: null,
+    setCustomMeshModel: (mesh) => set({ customMeshModel: mesh })
   };
 });

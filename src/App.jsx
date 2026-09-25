@@ -8,6 +8,7 @@ import Inspector from './components/layout/Inspector';
 import DualAIPanel from './components/ai/DualAIPanel';
 import TelemetryBar from './components/telemetry/TelemetryBar';
 import AuthModal from './components/auth/AuthModal';
+import ProjectLauncherModal from './components/project/ProjectLauncherModal';
 import { 
   Layers, 
   Sparkles, 
@@ -182,6 +183,9 @@ export default function App() {
 
       {/* 4. Lightweight Authentication Modal (Google OAuth 2.0 & Email) */}
       <AuthModal />
+
+      {/* 5. Project & Working Directory Launcher Modal (Startup Screen) */}
+      <ProjectLauncherModal />
     </div>
   );
 }

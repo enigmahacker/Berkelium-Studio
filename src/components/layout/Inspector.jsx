@@ -1,20 +1,16 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useStudioStore } from '../../store/useStudioStore';
 import { 
-  Sliders, 
   Move3d, 
   Wind, 
   Palette, 
-  Layers, 
   Gauge, 
   AlertTriangle, 
-  CheckCircle,
-  HelpCircle
+  CheckCircle
 } from 'lucide-react';
 
 export default function Inspector() {
   const {
-    activeWorkspace,
     shadingMode,
     setShadingMode,
     carParams,
