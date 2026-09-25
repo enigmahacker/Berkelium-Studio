@@ -323,6 +323,19 @@ export default function ThreeViewport() {
           y: camera.position.y.toFixed(2),
           z: camera.position.z.toFixed(2)
         });
+
+        // Update triangle count dynamically in HUD
+        let triCount = 0;
+        scene.traverse((obj) => {
+          if (obj.isMesh && obj.visible && obj.geometry) {
+            if (obj.geometry.index) {
+              triCount += obj.geometry.index.count / 3;
+            } else if (obj.geometry.attributes.position) {
+              triCount += obj.geometry.attributes.position.count / 3;
+            }
+          }
+        });
+        setTriangles(Math.round(triCount));
       }
 
       controls.update();
@@ -355,7 +368,6 @@ export default function ThreeViewport() {
 
           // AERODYNAMIC DEFLECTION OVER CAR BODY
           // Car bounds approx: X [-1.0, 1.0], Y [0.08, 1.2], Z [-2.0, 2.2]
-          const distFromCarCenter = Math.hypot(currentX, currentZ);
 
           // 1. Nose deflection (Z around 1.8 to 2.4)
           if (currentZ > 1.2 && currentZ < 2.5) {
@@ -517,39 +529,6 @@ export default function ThreeViewport() {
 
       scene.add(customMeshModel);
       threeRef.current.customMeshInstance = customMeshModel;
-
-      // Fit and position inside wind tunnel test section
-      const bbox = new THREE.Box3().setFromObject(customMeshModel);
-      const size = new THREE.Vector3();
-      bbox.getSize(size);
-      const maxDim = Math.max(size.x, size.y, size.z);
-
-      if (maxDim > 12.0 || maxDim < 0.5) {
-        const targetDim = 4.2;
-        const scaleFactor = targetDim / (maxDim || 1);
-        customMeshModel.scale.set(scaleFactor, scaleFactor, scaleFactor);
-      }
-
-      // Re-center model on ground level
-      const updatedBox = new THREE.Box3().setFromObject(customMeshModel);
-      const center = new THREE.Vector3();
-      updatedBox.getCenter(center);
-      customMeshModel.position.x = -center.x;
-      customMeshModel.position.z = -center.z;
-      customMeshModel.position.y = -updatedBox.min.y + 0.05;
-
-      // Update triangle count in HUD
-      let triCount = 0;
-      customMeshModel.traverse((obj) => {
-        if (obj.isMesh && obj.geometry) {
-          if (obj.geometry.index) {
-            triCount += obj.geometry.index.count / 3;
-          } else if (obj.geometry.attributes.position) {
-            triCount += obj.geometry.attributes.position.count / 3;
-          }
-        }
-      });
-      setTriangles(Math.round(triCount));
 
       // Attach transform controls if transform tool is active
       if (['translate', 'rotate', 'scale'].includes(activeTool) && transformControls) {

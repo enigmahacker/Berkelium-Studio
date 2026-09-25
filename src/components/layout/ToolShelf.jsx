@@ -23,7 +23,7 @@ const tools = [
 ];
 
 export default function ToolShelf() {
-  const { activeTool, setActiveTool } = useStudioStore();
+  const { activeTool, setActiveTool, windTunnelParams, setWindTunnelParams } = useStudioStore();
 
   // Global hotkeys for Blender tools
   useEffect(() => {

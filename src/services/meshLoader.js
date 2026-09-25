@@ -37,6 +37,7 @@ export async function loadMeshFromFile(file, shadingMode = 'aero_pressure') {
           const group = new THREE.Group();
           group.name = 'Imported_STL_Model';
           group.add(mesh);
+          normalizeMeshGroup(group);
 
           const stats = calculateMeshStats(geometry);
           resolve({ group, stats, fileType: 'STL' });
@@ -73,12 +74,9 @@ export async function loadMeshFromFile(file, shadingMode = 'aero_pressure') {
             }
           });
 
-          // Center group
-          const bbox = new THREE.Box3().setFromObject(group);
-          const center = bbox.getCenter(new THREE.Vector3());
-          group.position.sub(center);
-
+          normalizeMeshGroup(group);
           group.name = 'Imported_OBJ_Model';
+          const bbox = new THREE.Box3().setFromObject(group);
           const size = bbox.getSize(new THREE.Vector3());
           resolve({
             group,
@@ -126,11 +124,9 @@ export async function loadMeshFromFile(file, shadingMode = 'aero_pressure') {
                 }
               });
 
-              const bbox = new THREE.Box3().setFromObject(group);
-              const center = bbox.getCenter(new THREE.Vector3());
-              group.position.sub(center);
+              normalizeMeshGroup(group);
               group.name = 'Imported_GLTF_Model';
-
+              const bbox = new THREE.Box3().setFromObject(group);
               const size = bbox.getSize(new THREE.Vector3());
               resolve({
                 group,
@@ -155,6 +151,24 @@ export async function loadMeshFromFile(file, shadingMode = 'aero_pressure') {
       reject(new Error(`Unsupported 3D file format. Please upload .STL, .OBJ, .GLTF, or .GLB`));
     }
   });
+}
+
+function normalizeMeshGroup(group) {
+  const bbox = new THREE.Box3().setFromObject(group);
+  const size = bbox.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z);
+
+  if (maxDim > 12.0 || maxDim < 0.5) {
+    const targetDim = 4.2;
+    const scaleFactor = targetDim / (maxDim || 1);
+    group.scale.set(scaleFactor, scaleFactor, scaleFactor);
+  }
+
+  const updatedBox = new THREE.Box3().setFromObject(group);
+  const center = updatedBox.getCenter(new THREE.Vector3());
+  group.position.x = -center.x;
+  group.position.z = -center.z;
+  group.position.y = -updatedBox.min.y + 0.05;
 }
 
 function calculateMeshStats(geometry) {

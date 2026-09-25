@@ -127,7 +127,7 @@ export function calculateHomologationScore(carParams) {
  */
 export function estimateAeroCoefficients(carParams) {
   const {
-    wheelbase = 2.7,
+    wheelbase: _wheelbase = 2.7,
     width = 1.9,
     height = 1.15,
     splitterLength = 0.25,

@@ -14,7 +14,7 @@ function parseJwt(token) {
         .join('')
     );
     return JSON.parse(jsonPayload);
-  } catch (_e) {
+  } catch {
     return null;
   }
 }
@@ -76,7 +76,7 @@ export const useAuthStore = create((set) => ({
             user.avatar = data.user.avatar || user.avatar;
           }
         }
-      } catch (_backendErr) {
+      } catch {
         // Backend offline: seamless client-side verification
       }
 

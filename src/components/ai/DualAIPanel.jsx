@@ -6,8 +6,6 @@ import {
   ShieldAlert,
   Send,
   FileText,
-  CheckCircle2,
-  AlertTriangle,
   RotateCcw,
   Wand2,
   Paperclip,
@@ -22,7 +20,6 @@ export default function DualAIPanel() {
     setCarParams,
     telemetry,
     triggerVisualSnapshot,
-    capturedSnapshots,
     addScriptLog
   } = useStudioStore();
 
@@ -72,7 +69,7 @@ export default function DualAIPanel() {
       if (jsonMatch) {
         try {
           parsedParams = JSON.parse(jsonMatch[1]);
-        } catch (_e) {
+        } catch {
           // ignore json parse error
         }
       }

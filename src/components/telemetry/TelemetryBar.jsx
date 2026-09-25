@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useStudioStore } from '../../store/useStudioStore';
 import { 
   Activity, 
@@ -8,10 +8,7 @@ import {
   ChevronDown, 
   AlertTriangle, 
   CheckCircle2, 
-  Gauge, 
-  Flame,
-  ArrowDownCircle,
-  ArrowRightCircle
+  Gauge
 } from 'lucide-react';
 
 export default function TelemetryBar() {
@@ -75,7 +72,7 @@ export default function TelemetryBar() {
           <div className="hidden md:flex items-center gap-1.5 text-zinc-400">
             <Wind size={13} className="text-cyan-400" />
             <span>{windTunnelParams.windSpeed} m/s</span>
-            <span className="text-zinc-600">({speedKmh} km/h)</span>
+            <span className="text-zinc-600">({speedKmh} km/h | {speedMph} mph)</span>
           </div>
 
           {/* Dynamic Flow Status */}

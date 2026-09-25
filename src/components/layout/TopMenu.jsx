@@ -1,8 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useStudioStore } from '../../store/useStudioStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { checkHealth, uploadImageOcr, uploadPdfOcr } from '../../services/api';
-import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { 
   Box, 
   Wind, 
@@ -14,7 +13,6 @@ import {
   ChevronDown,
   Sparkles,
   Zap,
-  User,
   LogIn,
   LogOut
 } from 'lucide-react';
@@ -29,7 +27,6 @@ export default function TopMenu() {
     setWindTunnelParams,
     triggerVisualSnapshot,
     setAiState,
-    shadingMode,
     setShadingMode,
     telemetry,
     openProjectLauncher,
@@ -76,7 +73,7 @@ export default function TopMenu() {
           { sender: 'ai', role: 'Spatial Builder', text: `Blueprint OCR extracted successfully:\n${res.text}` }
         ]
       }));
-    } catch (err) {
+    } catch (_err) {
       setAiState({ isBuilding: false });
     }
   };
@@ -98,7 +95,7 @@ export default function TopMenu() {
           { sender: 'ai', role: 'Neural Auditor', text: `Homologation PDF processed:\n${res.text}` }
         ]
       }));
-    } catch (err) {
+    } catch (_err) {
       setAiState({ isBuilding: false });
     }
   };
@@ -197,6 +194,15 @@ export default function TopMenu() {
           </div>
           <span className="tracking-wide">BERKELIUM</span>
           <span className="text-[10px] text-orange-400 font-mono font-normal">STUDIO</span>
+          {currentProject?.name && (
+            <span
+              onClick={openProjectLauncher}
+              className="ml-1.5 px-2 py-0.5 rounded bg-zinc-800/80 hover:bg-zinc-700/80 text-[10px] text-zinc-300 font-mono font-normal border border-zinc-700/60 max-w-[150px] truncate cursor-pointer transition-colors"
+              title={`Active Project: ${currentProject.name} (Click to switch)`}
+            >
+              {currentProject.name}
+            </span>
+          )}
         </div>
 
         {/* Dropdown Menus */}

@@ -1,4 +1,4 @@
-import React, { useState, Suspense, lazy } from 'react';
+import { useState, Suspense, lazy } from 'react';
 import { useStudioStore } from './store/useStudioStore';
 import TopMenu from './components/layout/TopMenu';
 import ToolShelf from './components/layout/ToolShelf';

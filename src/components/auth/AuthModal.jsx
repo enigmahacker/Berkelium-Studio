@@ -49,7 +49,7 @@ export default function AuthModal() {
           shape: 'rectangular',
           logo_alignment: 'left'
         });
-      } catch (_e) {
+      } catch {
         // Fallback to custom Google button if GIS render fails
       }
     }

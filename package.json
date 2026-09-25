@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "electron": "electron electron/main.js",
+    "desktop": "vite build && electron electron/main.js"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
