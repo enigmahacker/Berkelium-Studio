@@ -1,0 +1,7 @@
+{
+  "fireworks_api_key": "YOUR_FIREWORKS_API_KEY_HERE",
+  "model_id": "accounts/fireworks/models/llama-v3p3-70b-instruct",
+  "base_url": "https://api.fireworks.ai/inference/v1",
+  "app_name": "Berkelium Studio",
+  "version": "1.0.0"
+}
