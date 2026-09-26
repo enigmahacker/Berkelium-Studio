@@ -102,6 +102,10 @@ export default function TopMenu() {
 
   // Quick Action: Run Wind Tunnel
   const handleToggleTunnel = () => {
+    if (!currentProject?.valid) {
+      openProjectLauncher();
+      return;
+    }
     setWindTunnelParams({ enabled: !windTunnelParams.enabled });
     if (!windTunnelParams.enabled) {
       setShadingMode('aero_pressure');
@@ -194,13 +198,21 @@ export default function TopMenu() {
           </div>
           <span className="tracking-wide">BERKELIUM</span>
           <span className="text-[10px] text-orange-400 font-mono font-normal">STUDIO</span>
-          {currentProject?.name && (
+          {currentProject?.valid ? (
             <span
               onClick={openProjectLauncher}
-              className="ml-1.5 px-2 py-0.5 rounded bg-zinc-800/80 hover:bg-zinc-700/80 text-[10px] text-zinc-300 font-mono font-normal border border-zinc-700/60 max-w-[150px] truncate cursor-pointer transition-colors"
-              title={`Active Project: ${currentProject.name} (Click to switch)`}
+              className="ml-1.5 px-2 py-0.5 rounded bg-emerald-950/60 hover:bg-emerald-900/60 text-[10px] text-emerald-300 font-mono font-medium border border-emerald-500/40 max-w-[200px] truncate cursor-pointer transition-colors"
+              title={`PROJECT: ${currentProject.path} | Engine: ${currentProject.engine} | Source: ${currentProject.sourceFile}`}
             >
-              {currentProject.name}
+              PROJECT: {currentProject.name}
+            </span>
+          ) : (
+            <span
+              onClick={openProjectLauncher}
+              className="ml-1.5 px-2 py-0.5 rounded bg-red-950/60 hover:bg-red-900/60 text-[10px] text-red-300 font-mono font-medium border border-red-500/40 cursor-pointer transition-colors"
+              title="Click to select a valid project directory"
+            >
+              PROJECT: Not detected
             </span>
           )}
         </div>
@@ -482,11 +494,15 @@ export default function TopMenu() {
         {/* Quick Actions */}
         <button
           onClick={handleToggleTunnel}
+          disabled={!currentProject?.valid}
           className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-semibold shadow transition-all ${
-            windTunnelParams.enabled
-              ? 'bg-cyan-600 hover:bg-cyan-500 text-white'
-              : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
+            !currentProject?.valid
+              ? 'bg-zinc-900 border border-zinc-800 text-zinc-600 cursor-not-allowed'
+              : windTunnelParams.enabled
+              ? 'bg-cyan-600 hover:bg-cyan-500 text-white cursor-pointer'
+              : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 cursor-pointer'
           }`}
+          title={!currentProject?.valid ? 'Disabled: Select a valid simulation project first' : 'Toggle Wind Tunnel'}
         >
           <Wind size={13} />
           <span>{windTunnelParams.enabled ? 'Tunnel ON' : 'Start Tunnel'}</span>

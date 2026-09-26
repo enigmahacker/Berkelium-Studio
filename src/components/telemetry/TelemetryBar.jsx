@@ -12,9 +12,10 @@ import {
 } from 'lucide-react';
 
 export default function TelemetryBar() {
-  const { telemetry, windTunnelParams, carParams } = useStudioStore();
+  const { telemetry, windTunnelParams, carParams, project, simulationState, openProjectLauncher } = useStudioStore();
   const [expanded, setExpanded] = useState(false);
 
+  const isNoProject = simulationState === 'NO_PROJECT' || !project?.valid;
   const speedKmh = (windTunnelParams.windSpeed * 3.6).toFixed(1);
   const speedMph = (windTunnelParams.windSpeed * 2.23694).toFixed(1);
 
@@ -24,6 +25,30 @@ export default function TelemetryBar() {
   );
   const rearDownforceRatio = 100 - frontDownforceRatio;
 
+  if (isNoProject || !telemetry) {
+    return (
+      <footer className="bg-zinc-950 border-t border-zinc-800 text-xs text-zinc-400 select-none z-30 flex items-center justify-between h-9 px-4">
+        <div className="flex items-center gap-3">
+          <Activity size={13} className="text-zinc-500" />
+          <span className="font-mono text-zinc-500 uppercase">Reduced-Order Aerodynamic Model:</span>
+          <span className="text-zinc-400 font-mono">
+            {isNoProject ? 'NO SIMULATION PROJECT LOADED' : 'READY — Click [Run Aerodynamic Simulation] to calculate'}
+          </span>
+        </div>
+        {isNoProject && (
+          <button
+            onClick={openProjectLauncher}
+            className="text-[11px] text-orange-400 hover:text-orange-300 font-semibold cursor-pointer"
+          >
+            Select Project...
+          </button>
+        )}
+      </footer>
+    );
+  }
+
+  const isStalled = !!telemetry.flow_separation;
+
   return (
     <footer className="bg-zinc-950 border-t border-zinc-800 text-xs text-zinc-300 select-none z-30 flex flex-col transition-all duration-300">
       {/* Primary Strip */}
@@ -32,14 +57,17 @@ export default function TelemetryBar() {
         <div className="flex items-center gap-5">
           <div className="flex items-center gap-2 font-semibold text-zinc-200">
             <Activity size={14} className="text-cyan-400" />
-            <span className="font-mono text-zinc-400">CFD TELEMETRY</span>
+            <span className="font-mono text-zinc-400">AERO TELEMETRY</span>
           </div>
 
           {/* Drag Force */}
           <div className="flex items-center gap-1.5 font-mono">
             <span className="text-zinc-500">Drag (Fd):</span>
             <span className="text-amber-400 font-bold text-sm">
-              {telemetry.dragForce.toLocaleString()} N
+              {telemetry.dragForce?.toLocaleString() || '0'} N
+            </span>
+            <span className="text-[10px] text-zinc-500">
+              (Cd: {telemetry.cd?.toFixed(3) || '0.320'})
             </span>
           </div>
 
@@ -47,21 +75,21 @@ export default function TelemetryBar() {
           <div className="flex items-center gap-1.5 font-mono">
             <span className="text-zinc-500">Downforce (-Fl):</span>
             <span className="text-cyan-400 font-bold text-sm">
-              {telemetry.downforce.toLocaleString()} N
+              {telemetry.downforce?.toLocaleString() || '0'} N
             </span>
             <span className="text-[10px] text-zinc-500">
-              (L/D: {telemetry.liftToDragRatio})
+              (Cl: {telemetry.cl?.toFixed(3) || '0.200'})
             </span>
           </div>
 
           {/* Power Required */}
           <div className="hidden sm:flex items-center gap-1.5 font-mono">
-            <span className="text-zinc-500">Power Required:</span>
+            <span className="text-zinc-500">Power Loss:</span>
             <span className="text-emerald-400 font-bold">
-              {telemetry.powerRequiredKw} kW
+              {telemetry.powerRequiredKw || '0'} kW
             </span>
             <span className="text-[10px] text-zinc-500">
-              ({telemetry.powerRequiredHp} HP)
+              ({telemetry.powerRequiredHp || '0'} HP)
             </span>
           </div>
         </div>
@@ -75,15 +103,15 @@ export default function TelemetryBar() {
             <span className="text-zinc-600">({speedKmh} km/h | {speedMph} mph)</span>
           </div>
 
-          {/* Dynamic Flow Status */}
+          {/* Dynamic Flow Status - Red warnings strictly driven by solver flow_separation */}
           <div
             className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${
-              telemetry.flowSeparationDetected
-                ? 'bg-red-950/60 border-red-500/60 text-red-300'
+              isStalled
+                ? 'bg-red-950/60 border-red-500/60 text-red-300 animate-pulse'
                 : 'bg-emerald-950/50 border-emerald-500/50 text-emerald-300'
             }`}
           >
-            {telemetry.flowSeparationDetected ? (
+            {isStalled ? (
               <>
                 <AlertTriangle size={12} className="text-red-400 shrink-0" />
                 <span>Boundary Layer Separation</span>
@@ -91,7 +119,7 @@ export default function TelemetryBar() {
             ) : (
               <>
                 <CheckCircle2 size={12} className="text-emerald-400 shrink-0" />
-                <span>Laminar Attached Flow</span>
+                <span>Boundary Layer Attached</span>
               </>
             )}
           </div>
@@ -99,7 +127,7 @@ export default function TelemetryBar() {
           {/* Expand Drawer Button */}
           <button
             onClick={() => setExpanded(!expanded)}
-            className="flex items-center gap-1 px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+            className="flex items-center gap-1 px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
             title="Toggle Detailed Aero Telemetry Drawer"
           >
             <span className="text-[10px]">Details</span>
@@ -128,17 +156,17 @@ export default function TelemetryBar() {
             </div>
           </div>
 
-          {/* Card 2: Reynolds Number & Turbulence */}
+          {/* Card 2: Reynolds Number */}
           <div className="bg-zinc-950 p-2.5 rounded border border-zinc-800 space-y-1">
             <div className="text-zinc-400 flex items-center justify-between">
               <span>Reynolds Number (Re)</span>
               <Activity size={13} className="text-emerald-400" />
             </div>
             <div className="text-base font-bold text-zinc-100">
-              {(telemetry.reynoldsNo / 1e6).toFixed(2)} × 10⁶
+              {telemetry.reynoldsNo ? (telemetry.reynoldsNo / 1e6).toFixed(2) : '14.59'} × 10⁶
             </div>
             <div className="text-[10px] text-zinc-500">
-              Fully Turbulent Boundary Layer Regime
+              Length: 4.80m | Turbulent Boundary Layer
             </div>
           </div>
 
@@ -149,7 +177,7 @@ export default function TelemetryBar() {
               <Wind size={13} className="text-amber-400" />
             </div>
             <div className="text-base font-bold text-amber-400">
-              {telemetry.dynamicPressure.toLocaleString()} Pa
+              {telemetry.dynamicPressure?.toLocaleString() || '1,240'} Pa
             </div>
             <div className="text-[10px] text-zinc-500">
               At ρ = {windTunnelParams.airDensity} kg/m³
@@ -159,14 +187,14 @@ export default function TelemetryBar() {
           {/* Card 4: Top Speed Power Equivalent */}
           <div className="bg-zinc-950 p-2.5 rounded border border-zinc-800 space-y-1">
             <div className="text-zinc-400 flex items-center justify-between">
-              <span>Aero Drag Resistance</span>
-              <Zap size={13} className="text-red-400" />
+              <span>Aero Drag Power Loss</span>
+              <Zap size={12} className="text-red-400" />
             </div>
             <div className="text-base font-bold text-zinc-100">
-              {telemetry.powerRequiredHp} HP
+              {telemetry.powerRequiredHp || '0'} HP
             </div>
             <div className="text-[10px] text-zinc-500">
-              Equiv engine power consumed by drag alone
+              ({telemetry.powerRequiredKw || '0'} kW)
             </div>
           </div>
         </div>

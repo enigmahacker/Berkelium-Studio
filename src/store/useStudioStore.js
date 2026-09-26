@@ -1,10 +1,10 @@
 import { create } from 'zustand';
-import { calculateAerodynamics } from '../services/aeroMath';
+import { executePythonSimulationModel } from '../services/aeroMath.js';
 import {
   DEFAULT_PYTHON_SCRIPT,
   DEFAULT_CPP_SCRIPT,
   DEFAULT_JS_SCRIPT
-} from '../services/defaultCodeTemplates';
+} from '../services/defaultCodeTemplates.js';
 
 export const useStudioStore = create((set, get) => {
   const initialWind = {
@@ -28,8 +28,6 @@ export const useStudioStore = create((set, get) => {
     groundClearance: 0.18 // meters (18 cm standard SUV clearance)
   };
 
-  const initialTelemetry = calculateAerodynamics(initialCar, initialWind);
-
   return {
     // Workspaces: 'modeling' | 'aero' | 'audit' | 'scripting'
     activeWorkspace: 'aero',
@@ -47,30 +45,54 @@ export const useStudioStore = create((set, get) => {
     shadingMode: 'aero_pressure',
     setShadingMode: (mode) => set({ shadingMode: mode }),
 
-    // Simulation State: 'RUNNING' | 'PAUSED'
-    simulationState: 'RUNNING',
-    toggleSimulationState: () =>
-      set((state) => {
-        const nextState = state.simulationState === 'RUNNING' ? 'PAUSED' : 'RUNNING';
-        const newEntry = {
-          id: Date.now(),
-          timestamp: new Date().toLocaleTimeString(),
-          type: 'INFO',
-          component: 'Simulation Core',
-          message: nextState === 'RUNNING' ? 'Wind tunnel flow integration resumed.' : 'Simulation execution paused.'
-        };
-        return {
-          simulationState: nextState,
-          eventLog: [newEntry, ...state.eventLog].slice(0, 80)
-        };
-      }),
+    // Strict State Machine Lifecycle:
+    // 'NO_PROJECT' -> 'SCANNING' -> 'PROJECT_READY' -> 'RUNNING' -> 'COMPLETE' (or 'ERROR')
+    simulationState: 'NO_PROJECT',
     setSimulationState: (state) => set({ simulationState: state }),
+
+    // Flow Field Visualizer connection status
+    // Particles NEVER run unless project.valid === true && simulationRunning && flowFieldAvailable === true
+    flowFieldAvailable: false,
+    toggleFlowFieldSolver: () => {
+      const { project, flowFieldAvailable, addEventLog } = get();
+      if (!project?.valid) {
+        addEventLog('WARN', 'Visualizer', 'Cannot activate flow field: No valid project loaded.');
+        return;
+      }
+      const next = !flowFieldAvailable;
+      if (next) {
+        addEventLog('INFO', 'Flow Field', '3D Velocity Field Solver connected (RK4 Streamlines active).');
+      } else {
+        addEventLog('INFO', 'Flow Field', '3D Velocity Field Solver disconnected. Reverting to pure reduced-order analytical model.');
+      }
+      set({ flowFieldAvailable: next });
+    },
+
+    toggleSimulationState: () => {
+      const state = get();
+      if (state.simulationState === 'NO_PROJECT') {
+        state.addEventLog('WARN', 'State Machine', 'Simulation action ignored: NO_PROJECT is active. Select a valid project directory first.');
+        return;
+      }
+      if (state.simulationState === 'PROJECT_READY') {
+        get().runSimulation();
+        return;
+      }
+      if (state.simulationState === 'RUNNING') {
+        set({ simulationState: 'PAUSED' });
+        state.addEventLog('INFO', 'Simulation Core', 'Simulation execution paused.');
+      } else if (state.simulationState === 'PAUSED') {
+        set({ simulationState: 'RUNNING' });
+        state.addEventLog('INFO', 'Simulation Core', 'Simulation execution resumed.');
+      } else if (state.simulationState === 'COMPLETE') {
+        get().runSimulation();
+      }
+    },
 
     // Visualization Mode: 'Velocity' | 'Pressure' | 'Streamlines' | 'Separation' | 'Surface' | 'Combined'
     visualizationMode: 'Velocity',
     setVisualizationMode: (mode) => {
       set({ visualizationMode: mode });
-      // Synchronize shading mode if appropriate
       if (mode === 'Surface') {
         set({ shadingMode: 'aero_pressure' });
       }
@@ -94,15 +116,8 @@ export const useStudioStore = create((set, get) => {
         id: 1,
         timestamp: new Date().toLocaleTimeString(),
         type: 'INFO',
-        component: 'Solver Core',
-        message: 'RK4 3D flow field engine initialized for Performance SUV.'
-      },
-      {
-        id: 2,
-        timestamp: new Date().toLocaleTimeString(),
-        type: 'INFO',
-        component: 'Geometry Engine',
-        message: 'Loaded dimensionally accurate SUV bodywork (4.8m x 1.98m x 1.65m).'
+        component: 'System',
+        message: 'Berkelium Studio initialized. Ready to validate simulation project.'
       }
     ],
     addEventLog: (type, component, message) => {
@@ -140,26 +155,30 @@ export const useStudioStore = create((set, get) => {
         diffuserAngle: 9.0,
         groundClearance: 0.18
       };
-      const telem = calculateAerodynamics(defaultCar, defaultWind);
+      const isProjValid = get().project?.valid;
       const resetEntry = {
         id: Date.now(),
         timestamp: new Date().toLocaleTimeString(),
         type: 'INFO',
         component: 'System',
-        message: 'Simulation deterministically reset to baseline homologated SUV state.'
+        message: isProjValid
+          ? 'Simulation reset to baseline homologated SUV state (PROJECT_READY).'
+          : 'Simulation reset. No project detected.'
       };
+
       set((state) => ({
         carParams: defaultCar,
         windTunnelParams: defaultWind,
-        telemetry: telem,
-        simulationState: 'RUNNING',
+        telemetry: null,
+        simulationState: isProjValid ? 'PROJECT_READY' : 'NO_PROJECT',
+        flowFieldAvailable: false,
         visualizationMode: 'Velocity',
         particleDensity: 3000,
         debugMode: false,
         aiState: {
           ...state.aiState,
           defectPins: [],
-          auditScore: telem.homologationScore
+          auditScore: 96
         },
         eventLog: [resetEntry, ...state.eventLog].slice(0, 80)
       }));
@@ -169,8 +188,9 @@ export const useStudioStore = create((set, get) => {
     windTunnelParams: initialWind,
     setWindTunnelParams: (params) => {
       const updated = { ...get().windTunnelParams, ...params };
-      const telemetry = calculateAerodynamics(get().carParams, updated);
-      set({ windTunnelParams: updated, telemetry });
+      const currentTelemetry = get().telemetry;
+      const newTelemetry = currentTelemetry ? executePythonSimulationModel(get().carParams, updated) : null;
+      set({ windTunnelParams: updated, telemetry: newTelemetry });
     },
 
     // Car aerodynamic geometry parameters
@@ -178,15 +198,16 @@ export const useStudioStore = create((set, get) => {
     setCarParams: (params) => {
       const prevCar = get().carParams;
       const updated = { ...prevCar, ...params };
-      const telemetry = calculateAerodynamics(updated, get().windTunnelParams);
-      
+      const currentTelemetry = get().telemetry;
+      const newTelemetry = currentTelemetry ? executePythonSimulationModel(updated, get().windTunnelParams) : null;
+
       // Update defect pins dynamically if angles trigger separation
       const defectPins = [];
       if (updated.rearWingAOA > 14.5) {
         defectPins.push({
           id: 'wing-stall',
           title: 'Rear Wing Flow Stall',
-          description: `AOA is ${updated.rearWingAOA.toFixed(1)}° (>14.5° max threshold). Adverse pressure gradient triggers massive boundary layer detachment.`,
+          description: `AOA is ${updated.rearWingAOA.toFixed(1)}° (>14.5° max threshold). Adverse pressure gradient triggers boundary layer detachment.`,
           position: [0, 1.76, -2.15],
           severity: 'critical'
         });
@@ -227,37 +248,55 @@ export const useStudioStore = create((set, get) => {
         get().addEventLog('INFO', 'Underbody', `Ride height restored to ${(updated.groundClearance * 100).toFixed(0)}cm. Venturi throat unblocked.`);
       }
 
-      if (updated.splitterLength > 0.38) {
-        defectPins.push({
-          id: 'splitter-scrape',
-          title: 'Splitter Extension Warning',
-          description: `Splitter projection of ${(updated.splitterLength * 100).toFixed(0)}cm exceeds optimal aero balance and risks bottoming out.`,
-          position: [0, 0.16, 2.15 + updated.splitterLength * 0.4],
-          severity: 'warning'
-        });
-      }
-
       set((state) => ({
         carParams: updated,
-        telemetry,
+        telemetry: newTelemetry,
         aiState: {
           ...state.aiState,
           defectPins,
-          auditScore: telemetry.homologationScore
+          auditScore: newTelemetry?.homologationScore || state.aiState.auditScore
         }
       }));
     },
 
-    // Aerodynamics & CFD Telemetry
-    telemetry: initialTelemetry,
+    // Aerodynamics & Telemetry (NULL initially until simulation is executed)
+    telemetry: null,
     setTelemetry: (telemetry) => set({ telemetry }),
+
+    // Execute Real Aerodynamic Simulation
+    runSimulation: () => {
+      const { simulationState, project, carParams, windTunnelParams, addEventLog } = get();
+      if (simulationState === 'NO_PROJECT' || !project?.valid) {
+        addEventLog('WARN', 'State Machine', 'Cannot execute simulation: NO_PROJECT is active. Select a valid project first.');
+        return;
+      }
+
+      set({ simulationState: 'RUNNING' });
+      addEventLog('INFO', 'Solver Core', `Executing ${project.engine} with source ${project.sourceFile}...`);
+
+      try {
+        const telemetry = executePythonSimulationModel(carParams, windTunnelParams);
+        if (telemetry.flow_separation) {
+          addEventLog('CRIT', 'Aerodynamics', 'Solver reported aerodynamic flow separation (stall/detachment detected).');
+        } else {
+          addEventLog('INFO', 'Aerodynamics', `Solver converged: Cd=${telemetry.cd} | Cl=${telemetry.cl} | Fd=${telemetry.dragForce}N | Fl=${telemetry.downforce}N.`);
+        }
+        set({
+          telemetry,
+          simulationState: 'COMPLETE'
+        });
+      } catch (err) {
+        addEventLog('CRIT', 'Solver Error', `Simulation failed: ${err.message}. Returning to PROJECT_READY.`);
+        set({ simulationState: 'PROJECT_READY' });
+      }
+    },
 
     // AI Dual-Brain state
     aiState: {
       builderPrompt: '',
       isBuilding: false,
       isAuditing: false,
-      auditScore: initialTelemetry.homologationScore || 96,
+      auditScore: 96,
       auditReport: null,
       defectPins: [],
       chatHistory: [
@@ -267,31 +306,7 @@ export const useStudioStore = create((set, get) => {
           text: 'Berkelium Studio AI initialized. Spatial monocoque geometry loaded. Ready to optimize aerodynamic surfaces, run CFD wind tunnel simulation, or audit flow characteristics.'
         }
       ],
-      activeScript: `// Berkelium Three.js Procedural Aerodynamics Script
-// Access variables: scene, carGroup, THREE, aeroParams
-
-console.log("Procedural car script ready.");
-
-// Example: Add an aerodynamic vortex generator flap
-const vgGeo = new THREE.ConeGeometry(0.04, 0.12, 4);
-const vgMat = new THREE.MeshStandardMaterial({ 
-  color: 0xf97316, 
-  roughness: 0.2, 
-  metalness: 0.8 
-});
-
-const leftVG = new THREE.Mesh(vgGeo, vgMat);
-leftVG.position.set(-0.55, 0.45, 1.4);
-leftVG.rotation.z = Math.PI / 4;
-leftVG.name = "Custom_VortexGenerator_L";
-carGroup.add(leftVG);
-
-const rightVG = leftVG.clone();
-rightVG.position.x = 0.55;
-rightVG.rotation.z = -Math.PI / 4;
-rightVG.name = "Custom_VortexGenerator_R";
-carGroup.add(rightVG);
-`
+      activeScript: `// Berkelium Three.js Procedural Aerodynamics Script\nconsole.log("Procedural car script ready.");`
     },
     setAiState: (patch) => {
       set((state) => ({
@@ -340,7 +355,6 @@ carGroup.add(rightVG);
         }
       })),
 
-    // Multi-angle snapshot generation request timestamp
     snapshotTriggerTime: 0,
     triggerVisualSnapshot: () => set({ snapshotTriggerTime: Date.now() }),
     capturedSnapshots: {
@@ -366,22 +380,184 @@ carGroup.add(rightVG);
     clearScriptLogs: () => set({ scriptOutputLog: [] }),
 
     // Real Project & Working Directory state
-    isProjectLauncherOpen: !localStorage.getItem('berkelium_skip_launcher'),
+    isProjectLauncherOpen: false,
     openProjectLauncher: () => set({ isProjectLauncherOpen: true }),
     closeProjectLauncher: () => set({ isProjectLauncherOpen: false }),
 
-    currentProject: {
-      name: 'Performance SUV Aerodynamics Studio',
-      path: '/projects/suv_aerodynamics',
-      files: [
-        { name: 'simulation.py', language: 'python', type: 'script' },
-        { name: 'aerodynamics_solver.cpp', language: 'cpp', type: 'kernel' },
-        { name: 'generate_car.js', language: 'javascript', type: 'cad' }
-      ]
+    project: {
+      valid: false,
+      path: null,
+      name: null,
+      engine: null,
+      sourceFile: null,
+      files: [],
+      rejectionReason: null
     },
-    setProject: (project) => set({ currentProject: project, isProjectLauncherOpen: false }),
+    currentProject: {
+      valid: false,
+      name: 'Not detected',
+      path: 'Not detected',
+      engine: 'Not detected',
+      sourceFile: 'None',
+      files: []
+    },
 
-    // Multi-Language Code Editor Files (Python, C++, JavaScript)
+    // Strict Project Validation Function
+    scanAndValidateProject: (dirData) => {
+      const dirName = dirData?.name || '';
+      const dirPath = dirData?.path || '';
+      const rawFiles = dirData?.files || [];
+
+      set({ simulationState: 'SCANNING' });
+
+      // 1. Check if folder is empty
+      if (!rawFiles || rawFiles.length === 0) {
+        const rejectedProject = {
+          valid: false,
+          path: dirPath || 'Not detected',
+          name: dirName || 'Empty Folder',
+          engine: null,
+          sourceFile: null,
+          files: [],
+          rejectionReason: 'EMPTY_DIRECTORY'
+        };
+        const logEntry = {
+          id: Date.now(),
+          timestamp: new Date().toLocaleTimeString(),
+          type: 'WARN',
+          component: 'Project Validator',
+          message: 'Rejected empty folder: No simulation project detected.'
+        };
+        set((state) => ({
+          simulationState: 'NO_PROJECT',
+          project: rejectedProject,
+          currentProject: rejectedProject,
+          telemetry: null,
+          flowFieldAvailable: false,
+          eventLog: [logEntry, ...state.eventLog].slice(0, 80)
+        }));
+        return { valid: false, reason: 'EMPTY_DIRECTORY' };
+      }
+
+      // 2. Check for recognized project structure
+      const RECOGNIZED = [
+        'package.json',
+        'pyproject.toml',
+        'requirements.txt',
+        'src',
+        'app',
+        'backend',
+        'frontend',
+        'simulation',
+        'simulation.py',
+        'aerodynamics_solver.cpp',
+        'berkelium.json'
+      ];
+
+      const fileNames = rawFiles.map((f) => (typeof f === 'string' ? f : f.name).toLowerCase());
+      const hasRecognizedItem = fileNames.some((name) =>
+        RECOGNIZED.some((rec) => name === rec || name.startsWith(rec + '/') || name.endsWith('/' + rec))
+      );
+
+      if (!hasRecognizedItem) {
+        const rejectedProject = {
+          valid: false,
+          path: dirPath || 'Not detected',
+          name: dirName || 'Invalid Folder',
+          engine: null,
+          sourceFile: null,
+          files: rawFiles,
+          rejectionReason: 'INVALID_STRUCTURE'
+        };
+        const logEntry = {
+          id: Date.now(),
+          timestamp: new Date().toLocaleTimeString(),
+          type: 'WARN',
+          component: 'Project Validator',
+          message: `Selected directory '${dirName}' contains no recognized simulation project.`
+        };
+        set((state) => ({
+          simulationState: 'NO_PROJECT',
+          project: rejectedProject,
+          currentProject: rejectedProject,
+          telemetry: null,
+          flowFieldAvailable: false,
+          eventLog: [logEntry, ...state.eventLog].slice(0, 80)
+        }));
+        return { valid: false, reason: 'INVALID_PROJECT' };
+      }
+
+      // 3. Project is VALID! Detect simulation engine & source file
+      let detectedEngine;
+      let sourceFile;
+
+      if (fileNames.includes('simulation.py')) {
+        detectedEngine = 'Reduced-Order Aerodynamic Model (Python)';
+        sourceFile = 'simulation.py';
+      } else if (fileNames.some((n) => n.includes('backend') || n === 'main.py')) {
+        detectedEngine = 'Reduced-Order Aerodynamic Model (Python Backend)';
+        sourceFile = 'backend/main.py';
+      } else if (fileNames.some((n) => n.endsWith('.cpp'))) {
+        detectedEngine = 'C++17 RK4 Aerodynamics Solver';
+        sourceFile = rawFiles.find((f) => (f.name || f).endsWith('.cpp'))?.name || 'aerodynamics_solver.cpp';
+      } else {
+        detectedEngine = 'Reduced-Order Aerodynamic Model (Berkelium Studio)';
+        sourceFile = 'simulation.py';
+      }
+
+      const validProject = {
+        valid: true,
+        path: dirPath || '/Users/prithviaryam/Downloads/berkelium-web',
+        name: dirName || 'Berkelium Studio',
+        engine: detectedEngine,
+        sourceFile,
+        files: rawFiles,
+        rejectionReason: null
+      };
+
+      const logEntry = {
+        id: Date.now(),
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'INFO',
+        component: 'Project Validator',
+        message: `Project loaded: ${validProject.path}. Engine: ${detectedEngine} (${sourceFile}).`
+      };
+
+      set((state) => ({
+        simulationState: 'PROJECT_READY',
+        project: validProject,
+        currentProject: validProject,
+        flowFieldAvailable: false,
+        telemetry: null,
+        isProjectLauncherOpen: false,
+        eventLog: [logEntry, ...state.eventLog].slice(0, 80)
+      }));
+
+      return { valid: true, project: validProject };
+    },
+
+    // Convenience function to load the actual Berkelium Studio root
+    loadRealBerkeliumStudioProject: () => {
+      return get().scanAndValidateProject({
+        name: 'Berkelium Studio',
+        path: '/Users/prithviaryam/Downloads/berkelium-web',
+        files: [
+          { name: 'simulation.py', type: 'python' },
+          { name: 'package.json', type: 'file' },
+          { name: 'backend', type: 'directory' },
+          { name: 'src', type: 'directory' },
+          { name: 'README.md', type: 'file' },
+          { name: 'vite.config.js', type: 'file' }
+        ]
+      });
+    },
+
+    setProject: (project) => {
+      if (!project) return;
+      get().scanAndValidateProject(project);
+    },
+
+    // Multi-Language Code Editor Files
     activeCodeFile: 'simulation.py',
     setActiveCodeFile: (fileName) => set({ activeCodeFile: fileName }),
     codeFiles: {

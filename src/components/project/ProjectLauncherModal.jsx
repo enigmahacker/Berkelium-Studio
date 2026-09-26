@@ -7,16 +7,16 @@ import {
   Compass,
   ArrowRight,
   X,
-  HardDrive,
-  Sparkles
+  Sparkles,
+  AlertTriangle
 } from 'lucide-react';
 
 export default function ProjectLauncherModal() {
   const {
     isProjectLauncherOpen,
     closeProjectLauncher,
-    currentProject,
-    setProject,
+    scanAndValidateProject,
+    loadRealBerkeliumStudioProject,
     setCustomMeshModel,
     setCarParams,
     shadingMode
@@ -25,9 +25,8 @@ export default function ProjectLauncherModal() {
   const [skipStartup, setSkipStartup] = useState(
     !!localStorage.getItem('berkelium_skip_launcher')
   );
-  const [selectedPreset, setSelectedPreset] = useState('hypercar');
-  const [customPath, setCustomPath] = useState(currentProject?.path || '/projects/aerodynamics_study');
   const [loadingMsg, setLoadingMsg] = useState('');
+  const [validationError, setValidationError] = useState(null);
   const fileInputRef = useRef(null);
   const folderInputRef = useRef(null);
 
@@ -44,18 +43,30 @@ export default function ProjectLauncherModal() {
 
   // 1. Native Folder Selection (Electron Native IPC or HTML5 File System Access API)
   const handleOpenLocalDirectory = async () => {
+    setValidationError(null);
     try {
       // Check if running in Electron desktop app
       if (typeof window !== 'undefined' && window.require) {
         try {
           const { ipcRenderer } = window.require('electron');
           const res = await ipcRenderer.invoke('dialog:openDirectory');
-          if (res && res.path) {
-            setProject({
+          if (res) {
+            const actualFiles = res.files || [];
+            const valRes = scanAndValidateProject({
               name: res.name,
               path: res.path,
-              files: res.files && res.files.length > 0 ? res.files : currentProject.files
+              files: actualFiles
             });
+
+            if (!valRes.valid) {
+              setValidationError({
+                title: valRes.reason === 'EMPTY_DIRECTORY' ? 'NO SIMULATION PROJECT DETECTED' : 'INVALID PROJECT STRUCTURE',
+                message: valRes.reason === 'EMPTY_DIRECTORY'
+                  ? 'The selected folder contains no recognized simulation project.\nSelect the actual Berkelium Studio project directory.'
+                  : `The selected folder '${res.name}' contains no recognized simulation files (simulation.py, package.json, etc.).`
+              });
+              return;
+            }
             closeProjectLauncher();
             return;
           }
@@ -67,40 +78,50 @@ export default function ProjectLauncherModal() {
       if ('showDirectoryPicker' in window) {
         setLoadingMsg('Scanning selected working directory...');
         const dirHandle = await window.showDirectoryPicker({
-          mode: 'readwrite'
+          mode: 'read'
         });
 
         const files = [];
         for await (const entry of dirHandle.values()) {
-          if (entry.kind === 'file') {
-            files.push({
-              name: entry.name,
-              type: entry.name.endsWith('.py')
-                ? 'python'
-                : entry.name.endsWith('.cpp') || entry.name.endsWith('.h')
-                ? 'cpp'
-                : entry.name.endsWith('.js')
-                ? 'javascript'
-                : 'file'
-            });
-          }
+          files.push({
+            name: entry.name,
+            kind: entry.kind,
+            type: entry.name.endsWith('.py')
+              ? 'python'
+              : entry.name.endsWith('.cpp') || entry.name.endsWith('.h')
+              ? 'cpp'
+              : entry.name.endsWith('.js')
+              ? 'javascript'
+              : entry.kind === 'directory'
+              ? 'directory'
+              : 'file'
+          });
         }
 
-        setProject({
-          name: dirHandle.name,
-          path: `file:///${dirHandle.name}`,
-          handle: dirHandle,
-          files: files.length > 0 ? files : currentProject.files
-        });
         setLoadingMsg('');
+        const valRes = scanAndValidateProject({
+          name: dirHandle.name,
+          path: dirHandle.name,
+          files
+        });
+
+        if (!valRes.valid) {
+          setValidationError({
+            title: valRes.reason === 'EMPTY_DIRECTORY' ? 'NO SIMULATION PROJECT DETECTED' : 'INVALID PROJECT STRUCTURE',
+            message: valRes.reason === 'EMPTY_DIRECTORY'
+              ? 'The selected folder contains no recognized simulation project.\nSelect the actual Berkelium Studio project directory.'
+              : `The selected folder '${dirHandle.name}' contains no recognized simulation files.`
+          });
+          return;
+        }
+
         closeProjectLauncher();
       } else {
-        // Fallback for browsers without showDirectoryPicker
         folderInputRef.current?.click();
       }
     } catch (err) {
       if (err.name !== 'AbortError') {
-        console.warn('Directory selection fallback:', err);
+        console.warn('Directory selection error:', err);
       }
       setLoadingMsg('');
     }
@@ -108,20 +129,44 @@ export default function ProjectLauncherModal() {
 
   // Fallback webkitdirectory handler
   const handleFallbackFolderSelect = (e) => {
+    setValidationError(null);
     const fileList = e.target.files;
-    if (fileList && fileList.length > 0) {
-      const files = Array.from(fileList).slice(0, 20).map((f) => ({
-        name: f.name,
-        type: f.name.endsWith('.py') ? 'python' : f.name.endsWith('.cpp') ? 'cpp' : 'file'
-      }));
-      const folderName = fileList[0].webkitRelativePath?.split('/')[0] || 'Custom Project';
-      setProject({
-        name: folderName,
-        path: `/local/${folderName}`,
-        files
+    if (!fileList || fileList.length === 0) {
+      scanAndValidateProject({
+        name: 'Empty Folder',
+        path: '',
+        files: []
       });
-      closeProjectLauncher();
+      setValidationError({
+        title: 'NO SIMULATION PROJECT DETECTED',
+        message: 'The selected folder contains no recognized simulation project.\nSelect the actual Berkelium Studio project directory.'
+      });
+      return;
     }
+
+    const files = Array.from(fileList).map((f) => ({
+      name: f.name,
+      type: f.name.endsWith('.py') ? 'python' : f.name.endsWith('.cpp') ? 'cpp' : 'file'
+    }));
+    const folderName = fileList[0].webkitRelativePath?.split('/')[0] || 'Selected Folder';
+
+    const valRes = scanAndValidateProject({
+      name: folderName,
+      path: `/local/${folderName}`,
+      files
+    });
+
+    if (!valRes.valid) {
+      setValidationError({
+        title: valRes.reason === 'EMPTY_DIRECTORY' ? 'NO SIMULATION PROJECT DETECTED' : 'INVALID PROJECT STRUCTURE',
+        message: valRes.reason === 'EMPTY_DIRECTORY'
+          ? 'The selected folder contains no recognized simulation project.\nSelect the actual Berkelium Studio project directory.'
+          : `The selected folder '${folderName}' contains no recognized simulation files.`
+      });
+      return;
+    }
+
+    closeProjectLauncher();
   };
 
   // 2. Real 3D Mesh Upload (.OBJ, .STL, .GLTF)
@@ -133,7 +178,7 @@ export default function ProjectLauncherModal() {
       setLoadingMsg(`Importing real 3D mesh: ${file.name}...`);
       const { group, stats } = await loadMeshFromFile(file, shadingMode);
       setCustomMeshModel(group);
-      setProject({
+      scanAndValidateProject({
         name: file.name.replace(/\.[^/.]+$/, ''),
         path: `/models/${file.name}`,
         files: [
@@ -149,9 +194,20 @@ export default function ProjectLauncherModal() {
     }
   };
 
-  // 3. Load Realistic Engineering Project Preset
+  // 3. Load Real Homologated Geometry Setup
   const handleLoadPreset = (key) => {
-    if (key === 'hypercar') {
+    if (key === 'suv') {
+      setCarParams({
+        wheelbase: 2.85,
+        width: 1.98,
+        height: 1.65,
+        splitterLength: 0.20,
+        rearWingAOA: 11.5,
+        rearWingSpan: 1.70,
+        diffuserAngle: 9.0,
+        groundClearance: 0.18
+      });
+    } else if (key === 'hypercar') {
       setCarParams({
         wheelbase: 2.7,
         width: 1.9,
@@ -162,55 +218,20 @@ export default function ProjectLauncherModal() {
         diffuserAngle: 9.0,
         groundClearance: 0.08
       });
-      setProject({
-        name: 'Le Mans Prototype Hypercar (LMP1)',
-        path: customPath || '/projects/hypercar_aerodynamics',
-        files: [
-          { name: 'simulation.py', language: 'python', type: 'script' },
-          { name: 'aerodynamics_solver.cpp', language: 'cpp', type: 'kernel' },
-          { name: 'generate_car.js', language: 'javascript', type: 'cad' }
-        ]
-      });
-    } else if (key === 'wing') {
-      setCarParams({
-        wheelbase: 2.5,
-        width: 1.8,
-        height: 1.1,
-        splitterLength: 0.15,
-        rearWingAOA: 13.8, // High downforce
-        rearWingSpan: 1.8,
-        diffuserAngle: 11.0,
-        groundClearance: 0.065
-      });
-      setProject({
-        name: 'NACA 6409 Airfoil & Dual-Element Wing Package',
-        path: '/projects/naca_wing_cfd',
-        files: [
-          { name: 'simulation.py', language: 'python', type: 'script' },
-          { name: 'aerodynamics_solver.cpp', language: 'cpp', type: 'kernel' },
-          { name: 'naca_profile.dat', language: 'text', type: 'coordinates' }
-        ]
-      });
     } else if (key === 'monza') {
       setCarParams({
         wheelbase: 2.8,
         width: 1.95,
         height: 1.12,
         splitterLength: 0.18,
-        rearWingAOA: 6.8, // Ultra-low drag
+        rearWingAOA: 6.8,
         rearWingSpan: 1.5,
         diffuserAngle: 7.5,
         groundClearance: 0.075
       });
-      setProject({
-        name: 'Monza Low-Drag Speed Record Setup',
-        path: '/projects/monza_low_drag',
-        files: [
-          { name: 'simulation.py', language: 'python', type: 'script' },
-          { name: 'aerodynamics_solver.cpp', language: 'cpp', type: 'kernel' }
-        ]
-      });
     }
+    // Load the real workspace root so project is valid
+    loadRealBerkeliumStudioProject();
     closeProjectLauncher();
   };
 
@@ -229,7 +250,7 @@ export default function ProjectLauncherModal() {
                   <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
                     Berkelium Studio
                     <span className="text-[10px] uppercase font-mono tracking-widest px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                      v1.1.0 • C++ & Python CFD
+                      Reduced-Order Aerodynamics
                     </span>
                   </h1>
                   <p className="text-xs text-zinc-400">
@@ -250,6 +271,51 @@ export default function ProjectLauncherModal() {
 
         {/* Modal Body */}
         <div className="p-8 space-y-6 max-h-[70vh] overflow-y-auto">
+          {/* Validation Error Alert Banner */}
+          {validationError && (
+            <div className="p-4 rounded-xl bg-red-950/80 border border-red-500 text-red-200 text-xs flex items-start gap-3 animate-in fade-in duration-150 shadow-lg">
+              <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <div className="font-bold font-mono tracking-wide text-red-300 text-sm">
+                  {validationError.title}
+                </div>
+                <p className="text-zinc-300 whitespace-pre-line leading-relaxed font-sans">
+                  {validationError.message}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Primary Recommended Action: Load Berkelium Studio Project Root */}
+          <button
+            type="button"
+            onClick={() => {
+              loadRealBerkeliumStudioProject();
+              closeProjectLauncher();
+            }}
+            className="w-full p-4 rounded-xl bg-gradient-to-r from-orange-600/25 via-amber-600/15 to-transparent border-2 border-orange-500/80 hover:border-orange-400 text-left transition-all group shadow-lg hover:shadow-orange-500/20"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 rounded-lg bg-orange-600 flex items-center justify-center text-white font-bold text-sm shadow">
+                  Bk
+                </div>
+                <div>
+                  <div className="font-bold text-zinc-100 flex items-center gap-2">
+                    <span>Open Berkelium Studio Project</span>
+                    <span className="px-2 py-0.5 rounded text-[9px] font-mono bg-orange-500/20 text-orange-300 border border-orange-500/40 uppercase font-semibold">
+                      Recommended
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Loads real project root: <span className="font-mono text-zinc-300">/Users/prithviaryam/Downloads/berkelium-web</span>
+                  </p>
+                </div>
+              </div>
+              <ArrowRight className="w-5 h-5 text-orange-400 group-hover:translate-x-1 transition-transform" />
+            </div>
+          </button>
+
           {/* Action Row: Open Local Directory & Import 3D Mesh */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Open Folder */}
@@ -267,7 +333,7 @@ export default function ProjectLauncherModal() {
                   <ArrowRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
                 </span>
                 <p className="text-xs text-zinc-400">
-                  Open a local project folder containing Python, C++, or 3D files.
+                  Validate and open a project containing simulation.py or package.json.
                 </p>
               </div>
             </button>
@@ -315,132 +381,101 @@ export default function ProjectLauncherModal() {
             <div className="flex items-center justify-between">
               <label className="text-xs font-semibold text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-orange-400" />
-                Real Engineering Project Presets
+                Aerodynamic Configuration Presets
               </label>
-              <span className="text-[11px] text-zinc-500">Includes real C++ & Python CFD code</span>
+              <span className="text-[11px] text-zinc-500">Loads vehicle geometry parameters</span>
             </div>
 
             <div className="grid grid-cols-1 gap-2.5">
-              {/* Preset 1 */}
+              {/* Preset 0: Performance SUV */}
               <div
-                onClick={() => setSelectedPreset('hypercar')}
-                className={`p-3.5 rounded-xl border cursor-pointer transition-all flex items-center justify-between ${
-                  selectedPreset === 'hypercar'
-                    ? 'bg-blue-950/40 border-blue-500 text-white shadow-lg'
-                    : 'bg-[#18181b] border-zinc-800 text-zinc-300 hover:border-zinc-700'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-blue-600/30 text-blue-400 flex items-center justify-center font-bold text-xs">
-                    01
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-semibold">Le Mans Prototype Hypercar (LMP1)</h4>
-                    <p className="text-[11px] text-zinc-400">
-                      High-downforce prototype car, Venturi ground-effect floor, dual-element wing.
-                    </p>
-                  </div>
-                </div>
-                <div className="text-[11px] font-mono text-zinc-400">
-                  Cd: 0.278 • Cl: 1.15
-                </div>
-              </div>
-
-              {/* Preset 2 */}
-              <div
-                onClick={() => setSelectedPreset('wing')}
-                className={`p-3.5 rounded-xl border cursor-pointer transition-all flex items-center justify-between ${
-                  selectedPreset === 'wing'
-                    ? 'bg-blue-950/40 border-blue-500 text-white shadow-lg'
-                    : 'bg-[#18181b] border-zinc-800 text-zinc-300 hover:border-zinc-700'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-600/30 text-emerald-400 flex items-center justify-center font-bold text-xs">
-                    02
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-semibold">NACA 6409 Airfoil & High-Lift Wing Package</h4>
-                    <p className="text-[11px] text-zinc-400">
-                      Slotted flap aerodynamic wing, boundary layer stall threshold analysis.
-                    </p>
-                  </div>
-                </div>
-                <div className="text-[11px] font-mono text-zinc-400">
-                  Cd: 0.320 • Cl: 1.48
-                </div>
-              </div>
-
-              {/* Preset 3 */}
-              <div
-                onClick={() => setSelectedPreset('monza')}
-                className={`p-3.5 rounded-xl border cursor-pointer transition-all flex items-center justify-between ${
-                  selectedPreset === 'monza'
-                    ? 'bg-blue-950/40 border-blue-500 text-white shadow-lg'
-                    : 'bg-[#18181b] border-zinc-800 text-zinc-300 hover:border-zinc-700'
-                }`}
+                onClick={() => handleLoadPreset('suv')}
+                className="p-3.5 rounded-xl border border-zinc-800 hover:border-orange-500/80 bg-[#18181b] hover:bg-zinc-900 cursor-pointer transition-all flex items-center justify-between group"
               >
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-lg bg-orange-600/30 text-orange-400 flex items-center justify-center font-bold text-xs">
-                    03
+                    01
                   </div>
                   <div>
-                    <h4 className="text-xs font-semibold">Monza Low-Drag Speed Record Setup</h4>
+                    <h4 className="text-xs font-semibold text-zinc-100 group-hover:text-orange-300 transition-colors">
+                      Performance SUV (4.8m Bluff Body)
+                    </h4>
                     <p className="text-[11px] text-zinc-400">
-                      Trimmed rear wing AOA (6.8°), reduced frontal parasitic drag, high-velocity flow.
+                      Aerodynamic SUV bodywork, 18cm ride height, roof spoiler, Venturi underbody ramp.
                     </p>
                   </div>
                 </div>
-                <div className="text-[11px] font-mono text-zinc-400">
-                  Cd: 0.235 • Cl: 0.72
-                </div>
+                <ArrowRight className="w-4 h-4 text-zinc-500 group-hover:text-orange-400 group-hover:translate-x-0.5 transition-all" />
               </div>
-            </div>
-          </div>
 
-          {/* Working directory path display */}
-          <div className="space-y-1.5">
-            <label className="text-[11px] font-medium text-zinc-400">
-              Active Project Working Path
-            </label>
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#0b0b10] border border-zinc-800 text-xs font-mono text-zinc-300">
-              <HardDrive className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-              <input
-                type="text"
-                value={customPath}
-                onChange={(e) => setCustomPath(e.target.value)}
-                className="bg-transparent border-none outline-none flex-1 text-xs text-zinc-200"
-              />
+              {/* Preset 1: Hypercar */}
+              <div
+                onClick={() => handleLoadPreset('hypercar')}
+                className="p-3.5 rounded-xl border border-zinc-800 hover:border-blue-500/80 bg-[#18181b] hover:bg-zinc-900 cursor-pointer transition-all flex items-center justify-between group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-blue-600/30 text-blue-400 flex items-center justify-center font-bold text-xs">
+                    02
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-semibold text-zinc-100 group-hover:text-blue-300 transition-colors">
+                      Le Mans Prototype Hypercar (LMP1)
+                    </h4>
+                    <p className="text-[11px] text-zinc-400">
+                      High-downforce prototype car, 8cm ground clearance, aggressive dual-element wing.
+                    </p>
+                  </div>
+                </div>
+                <ArrowRight className="w-4 h-4 text-zinc-500 group-hover:text-blue-400 group-hover:translate-x-0.5 transition-all" />
+              </div>
+
+              {/* Preset 2: Low-Drag Monza */}
+              <div
+                onClick={() => handleLoadPreset('monza')}
+                className="p-3.5 rounded-xl border border-zinc-800 hover:border-emerald-500/80 bg-[#18181b] hover:bg-zinc-900 cursor-pointer transition-all flex items-center justify-between group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-600/30 text-emerald-400 flex items-center justify-center font-bold text-xs">
+                    03
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-semibold text-zinc-100 group-hover:text-emerald-300 transition-colors">
+                      Monza Low-Drag Speed Record Setup
+                    </h4>
+                    <p className="text-[11px] text-zinc-400">
+                      Minimal trim downforce, reduced frontal wake for top-speed straight-line efficiency.
+                    </p>
+                  </div>
+                </div>
+                <ArrowRight className="w-4 h-4 text-zinc-500 group-hover:text-emerald-400 group-hover:translate-x-0.5 transition-all" />
+              </div>
             </div>
           </div>
 
           {loadingMsg && (
-            <div className="flex items-center gap-2 p-3 text-xs text-blue-300 bg-blue-950/40 border border-blue-800/60 rounded-lg">
-              <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin shrink-0" />
-              <span>{loadingMsg}</span>
+            <div className="text-xs text-orange-400 font-mono animate-pulse text-center">
+              {loadingMsg}
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="px-8 py-4 bg-[#0b0b10] border-t border-[#1e293b] flex items-center justify-between">
-          <label className="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer select-none">
+        <div className="px-8 py-4 bg-[#090d16] border-t border-[#1e293b] flex items-center justify-between text-xs">
+          <label className="flex items-center gap-2 cursor-pointer text-zinc-400 hover:text-zinc-200">
             <input
               type="checkbox"
               checked={skipStartup}
               onChange={(e) => handleSkipChange(e.target.checked)}
-              className="rounded bg-zinc-800 border-zinc-700 text-orange-500 focus:ring-0"
+              className="rounded bg-zinc-800 border-zinc-700 text-orange-600 focus:ring-0"
             />
-            Don't show on startup
+            <span>Don't show this launcher at startup</span>
           </label>
 
           <button
-            type="button"
-            onClick={() => handleLoadPreset(selectedPreset)}
-            className="px-5 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-semibold shadow-md flex items-center gap-2 transition-all"
+            onClick={closeProjectLauncher}
+            className="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white font-medium transition-colors"
           >
-            <span>Launch Project Studio</span>
-            <ArrowRight className="w-3.5 h-3.5" />
+            Cancel
           </button>
         </div>
       </div>

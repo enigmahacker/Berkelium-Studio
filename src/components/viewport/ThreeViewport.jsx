@@ -13,7 +13,10 @@ import {
 import { deriveComponentStates } from '../../services/aeroMath';
 import { 
   Activity, 
-  AlertTriangle
+  AlertTriangle,
+  FolderX,
+  FolderOpen,
+  Compass
 } from 'lucide-react';
 
 export default function ThreeViewport() {
@@ -38,7 +41,12 @@ export default function ThreeViewport() {
     visualizationMode,
     particleDensity,
     debugMode,
-    telemetry
+    telemetry,
+    project,
+    flowFieldAvailable,
+    toggleFlowFieldSolver,
+    openProjectLauncher,
+    loadRealBerkeliumStudioProject
   } = useStudioStore();
 
   // Internal viewport telemetry HUD
@@ -440,16 +448,33 @@ export default function ThreeViewport() {
       const currentWind = storeState.windTunnelParams;
       const currentCar = storeState.carParams;
       const currentCompStates = storeState.telemetry?.componentStates || deriveComponentStates(currentCar, currentWind);
-      const isTunnelEnabled = currentWind.enabled;
-      const isRunning = storeState.simulationState !== 'PAUSED';
+      const isProjectValid = storeState.project?.valid === true;
+      const isNoProject = storeState.simulationState === 'NO_PROJECT';
+      const isFlowFieldAvailable = storeState.flowFieldAvailable === true;
+      const isRunning = storeState.simulationState === 'RUNNING';
       const vizMode = storeState.visualizationMode || 'Velocity';
       const density = storeState.particleDensity || 3000;
       const activeCount = Math.min(maxParticles, density);
 
+      // Hide or show car assembly and tunnel depending on project validity
+      if (carGroup) {
+        carGroup.visible = isProjectValid && !isNoProject && sceneVisibility.carAssembly !== false;
+      }
+      if (tunnelGroup) {
+        tunnelGroup.visible = isProjectValid && !isNoProject && sceneVisibility.windTunnel !== false;
+      }
+
       const deltaSec = isRunning ? Math.min(0.035, (currentTime - lastTimeMark) / 1000) : 0;
       lastTimeMark = currentTime;
 
-      if (streamlinesMesh && isTunnelEnabled) {
+      // Particle system strictly gated:
+      // NEVER run unless project.valid === true && simulation.running === true && flowField.available === true
+      if (!isProjectValid || isNoProject || !isFlowFieldAvailable || !currentWind.enabled) {
+        if (streamlinesMesh) {
+          streamlinesMesh.visible = false;
+          streamGeo.setDrawRange(0, 0);
+        }
+      } else if (streamlinesMesh) {
         streamlinesMesh.visible = sceneVisibility.streamlines !== false;
         streamGeo.setDrawRange(0, activeCount);
 
@@ -560,8 +585,6 @@ export default function ThreeViewport() {
 
         streamGeo.attributes.position.needsUpdate = true;
         streamGeo.attributes.color.needsUpdate = true;
-      } else if (streamlinesMesh) {
-        streamlinesMesh.visible = false;
       }
 
       // UPDATE DEFECT PIN PROJECTIONS ON SCREEN
@@ -904,8 +927,8 @@ export default function ThreeViewport() {
         </div>
       </div>
 
-      {/* Active Component Aerodynamic Warnings Banner */}
-      {telemetry?.componentStates && (
+      {/* Active Component Aerodynamic Warnings Banner - STRICTLY driven by solver flow_separation flag */}
+      {telemetry?.flow_separation && telemetry?.componentStates && (
         (telemetry.componentStates.rearWing === 'STALLED' ||
          telemetry.componentStates.diffuser === 'SEPARATED' ||
          telemetry.componentStates.underbody === 'SEPARATED') && (
@@ -931,6 +954,70 @@ export default function ThreeViewport() {
             </div>
           </div>
         )
+      )}
+
+      {/* Clean Empty Project UI Overlay when NO_PROJECT or invalid */}
+      {(!project?.valid || simulationState === 'NO_PROJECT') && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950/95 z-40 p-6 text-center select-none backdrop-blur-md">
+          <div className="w-16 h-16 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-500 mb-4 shadow-2xl">
+            <FolderX className="w-8 h-8 text-amber-500" />
+          </div>
+          <h2 className="text-xl font-bold tracking-tight text-zinc-100 mb-2 font-mono">
+            NO SIMULATION PROJECT DETECTED
+          </h2>
+          <p className="text-sm text-zinc-400 max-w-md mb-6 leading-relaxed">
+            The selected folder contains no recognized simulation project.<br />
+            Select the actual Berkelium Studio project directory.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <button
+              onClick={openProjectLauncher}
+              className="px-4 py-2.5 rounded-lg bg-orange-600 hover:bg-orange-500 text-white font-semibold text-xs transition-all shadow-lg shadow-orange-600/30 flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <FolderOpen size={15} />
+              <span>Select Project Directory</span>
+            </button>
+            <button
+              onClick={loadRealBerkeliumStudioProject}
+              className="px-4 py-2.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 font-semibold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <Compass size={15} className="text-orange-400" />
+              <span>Load Berkelium Studio Root (/Users/.../berkelium-web)</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Flow Visualization Status Banner: Distinguishes Reduced-Order Model from 3D Flow Field */}
+      {project?.valid && simulationState !== 'NO_PROJECT' && !flowFieldAvailable && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-zinc-950/90 border border-amber-500/70 text-amber-300 px-4 py-2 rounded-xl shadow-2xl backdrop-blur-md text-xs font-mono z-20">
+          <AlertTriangle size={15} className="text-amber-400 shrink-0" />
+          <div>
+            <span className="font-bold">FLOW VISUALIZATION:</span> Velocity field unavailable
+            <span className="text-zinc-400 ml-2">(Streamlines: Requires Flow Field Solver)</span>
+          </div>
+          <button
+            onClick={toggleFlowFieldSolver}
+            className="ml-2 px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-200 font-sans text-xs font-semibold transition-colors cursor-pointer"
+          >
+            Connect 3D Flow Solver
+          </button>
+        </div>
+      )}
+
+      {project?.valid && simulationState !== 'NO_PROJECT' && flowFieldAvailable && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-zinc-950/90 border border-cyan-500/70 text-cyan-300 px-4 py-2 rounded-xl shadow-2xl backdrop-blur-md text-xs font-mono z-20">
+          <Activity size={15} className="text-cyan-400 shrink-0" />
+          <div>
+            <span className="font-bold">3D Flow Field Visualizer:</span> Connected (RK4 Streamlines)
+          </div>
+          <button
+            onClick={toggleFlowFieldSolver}
+            className="ml-2 px-2.5 py-0.5 rounded bg-zinc-850 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 font-sans text-[11px] transition-colors cursor-pointer"
+          >
+            Disconnect
+          </button>
+        </div>
       )}
 
       {/* Top Right Blender ViewCube / Orientation Gizmo */}
