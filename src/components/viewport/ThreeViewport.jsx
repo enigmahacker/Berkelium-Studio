@@ -5,6 +5,13 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { useStudioStore } from '../../store/useStudioStore';
 import { buildProceduralCar, updateCarGeometry, disposeCarAssembly } from '../../services/proceduralCar';
 import { 
+  rk4Integrate, 
+  isPointInsideVehicle, 
+  projectOutOfSolid, 
+  getVelocityField 
+} from '../../services/flowField';
+import { deriveComponentStates } from '../../services/aeroMath';
+import { 
   Activity, 
   AlertTriangle
 } from 'lucide-react';
@@ -26,7 +33,12 @@ export default function ThreeViewport() {
     setCapturedSnapshots,
     scriptExecutionVersion,
     addScriptLog,
-    customMeshModel
+    customMeshModel,
+    simulationState,
+    visualizationMode,
+    particleDensity,
+    debugMode,
+    telemetry
   } = useStudioStore();
 
   // Internal viewport telemetry HUD
@@ -210,52 +222,133 @@ export default function ThreeViewport() {
 
     scene.add(tunnelGroup);
 
-    // PROCEDURAL CAR
+    // PROCEDURAL CAR (Performance SUV)
     const carGroup = buildProceduralCar(carParams, shadingMode);
     scene.add(carGroup);
 
-    // STREAMLINE PARTICLE SYSTEM
-    const maxParticles = 3200;
+    // DEBUG OVERLAY WIREFRAME GROUP (Inlet/Outlet, Obstacle Envelope, Wake Volume)
+    const debugGroup = new THREE.Group();
+    debugGroup.name = 'DebugOverlayGroup';
+
+    // 1. Upstream Inlet Plane wireframe (Z = +5.4m)
+    const inletPlaneGeo = new THREE.PlaneGeometry(3.6, 2.6);
+    const inletPlaneMat = new THREE.MeshBasicMaterial({
+      color: 0x06b6d4,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.6
+    });
+    const inletPlaneMesh = new THREE.Mesh(inletPlaneGeo, inletPlaneMat);
+    inletPlaneMesh.position.set(0, 1.3, 5.4);
+    debugGroup.add(inletPlaneMesh);
+
+    // 2. Downstream Outlet Plane wireframe (Z = -5.3m)
+    const outletPlaneGeo = new THREE.PlaneGeometry(3.6, 2.6);
+    const outletPlaneMat = new THREE.MeshBasicMaterial({
+      color: 0xf97316,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.6
+    });
+    const outletPlaneMesh = new THREE.Mesh(outletPlaneGeo, outletPlaneMat);
+    outletPlaneMesh.position.set(0, 1.3, -5.3);
+    debugGroup.add(outletPlaneMesh);
+
+    // 3. Vehicle Solid Obstacle Bounding Volume
+    const carBoundsGeo = new THREE.BoxGeometry(2.05, 1.70, 4.8);
+    const carBoundsMat = new THREE.MeshBasicMaterial({
+      color: 0xeab308,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.65
+    });
+    const carBoundsMesh = new THREE.Mesh(carBoundsGeo, carBoundsMat);
+    carBoundsMesh.position.set(0, 0.95, 0.0);
+    debugGroup.add(carBoundsMesh);
+
+    // 4. Bluff-Body Wake Recirculation Envelope
+    const wakeGeo = new THREE.BoxGeometry(2.2, 1.75, 2.8);
+    const wakeMat = new THREE.MeshBasicMaterial({
+      color: 0xec4899,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.5
+    });
+    const wakeMesh = new THREE.Mesh(wakeGeo, wakeMat);
+    wakeMesh.position.set(0, 0.95, -3.8);
+    debugGroup.add(wakeMesh);
+
+    debugGroup.visible = false;
+    scene.add(debugGroup);
+
+    // STREAMLINE PARTICLE SYSTEM (RK4 Numerical Integration Engine)
+    const maxParticles = 12000;
     const streamGeo = new THREE.BufferGeometry();
     const streamPositions = new Float32Array(maxParticles * 3);
     const streamColors = new Float32Array(maxParticles * 3);
-    const particleMetadata = []; // velocity, original offset, age, life
+    const particles = [];
 
-    const colorBlue = new THREE.Color(0x0ea5e9);
-    const colorGreen = new THREE.Color(0x22c55e);
-    const colorYellow = new THREE.Color(0xeab308);
-    const colorRed = new THREE.Color(0xef4444);
+    // Circular particle sprite texture
+    const canvas = document.createElement('canvas');
+    canvas.width = 32;
+    canvas.height = 32;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+    grad.addColorStop(0, 'rgba(255,255,255,1)');
+    grad.addColorStop(0.3, 'rgba(255,255,255,0.85)');
+    grad.addColorStop(0.7, 'rgba(255,255,255,0.25)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 32, 32);
+    const particleTexture = new THREE.CanvasTexture(canvas);
 
     for (let i = 0; i < maxParticles; i++) {
-      // Streamline rake spread (grid at nozzle inlet)
-      const rakeX = (Math.random() - 0.5) * 2.8;
-      const rakeY = 0.05 + Math.random() * 1.5;
-      const rakeZ = 5.2 - Math.random() * 0.4;
+      // Wind tunnel nozzle rake inlet plane
+      const seedX = (Math.random() - 0.5) * 2.8;
+      const seedY = 0.04 + Math.random() * 2.2;
+      const seedZ = 5.2 + Math.random() * 0.4;
+      const maxLife = 3.2 + Math.random() * 1.8;
+      const initAge = Math.random() * maxLife;
 
-      streamPositions[i * 3] = rakeX;
-      streamPositions[i * 3 + 1] = rakeY;
-      streamPositions[i * 3 + 2] = rakeZ;
+      const pPos = new THREE.Vector3(seedX, seedY, seedZ);
 
-      streamColors[i * 3] = colorBlue.r;
-      streamColors[i * 3 + 1] = colorBlue.g;
-      streamColors[i * 3 + 2] = colorBlue.b;
+      // Pre-integrate forward so wind tunnel is immediately full of continuous streamlines
+      const initSteps = Math.floor(initAge / 0.035);
+      for (let s = 0; s < initSteps; s++) {
+        const next = rk4Integrate(pPos, 0.035, carParams, windTunnelParams, null);
+        pPos.copy(next);
+        if (pPos.z <= -5.3) {
+          pPos.set(seedX, seedY, 5.4 + Math.random() * 0.3);
+        }
+      }
 
-      particleMetadata.push({
-        baseX: rakeX,
-        baseY: rakeY,
-        progress: Math.random() * 10.5,
-        speedFactor: 0.85 + Math.random() * 0.3
+      particles.push({
+        pos: pPos,
+        seedX,
+        seedY,
+        age: initAge,
+        maxLife
       });
+
+      streamPositions[i * 3] = pPos.x;
+      streamPositions[i * 3 + 1] = pPos.y;
+      streamPositions[i * 3 + 2] = pPos.z;
+
+      streamColors[i * 3] = 0.05;
+      streamColors[i * 3 + 1] = 0.80;
+      streamColors[i * 3 + 2] = 0.85;
     }
 
     streamGeo.setAttribute('position', new THREE.BufferAttribute(streamPositions, 3));
     streamGeo.setAttribute('color', new THREE.BufferAttribute(streamColors, 3));
+    streamGeo.setDrawRange(0, 3000); // initial default density
 
     const streamMat = new THREE.PointsMaterial({
-      size: 0.045,
+      size: 0.048,
+      map: particleTexture,
       vertexColors: true,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.88,
       blending: THREE.AdditiveBlending,
       depthWrite: false
     });
@@ -272,8 +365,9 @@ export default function ThreeViewport() {
       transformControls,
       carGroup,
       tunnelGroup,
+      debugGroup,
       streamlinesMesh,
-      streamlineData: { positions: streamPositions, colors: streamColors, metadata: particleMetadata, geo: streamGeo },
+      streamlineData: { positions: streamPositions, colors: streamColors, particles, geo: streamGeo },
       gridHelper,
       animFrameId: null,
       lastTime: performance.now(),
@@ -307,6 +401,7 @@ export default function ThreeViewport() {
     // ANIMATION RENDER LOOP
     let lastFpsUpdate = performance.now();
     let frames = 0;
+    let lastTimeMark = performance.now();
 
     const animate = (currentTime) => {
       threeRef.current.animFrameId = requestAnimationFrame(animate);
@@ -340,99 +435,131 @@ export default function ThreeViewport() {
 
       controls.update();
 
-      // UPDATE STREAMLINES
-      const currentWind = useStudioStore.getState().windTunnelParams;
-      const currentCar = useStudioStore.getState().carParams;
+      // UPDATE STREAMLINES VIA RK4 INTEGRATION
+      const storeState = useStudioStore.getState();
+      const currentWind = storeState.windTunnelParams;
+      const currentCar = storeState.carParams;
+      const currentCompStates = storeState.telemetry?.componentStates || deriveComponentStates(currentCar, currentWind);
       const isTunnelEnabled = currentWind.enabled;
-      const windSpeed = currentWind.windSpeed;
-      const turbulence = currentWind.turbulence || 0.05;
+      const isRunning = storeState.simulationState !== 'PAUSED';
+      const vizMode = storeState.visualizationMode || 'Velocity';
+      const density = storeState.particleDensity || 3000;
+      const activeCount = Math.min(maxParticles, density);
+
+      const deltaSec = isRunning ? Math.min(0.035, (currentTime - lastTimeMark) / 1000) : 0;
+      lastTimeMark = currentTime;
 
       if (streamlinesMesh && isTunnelEnabled) {
         streamlinesMesh.visible = sceneVisibility.streamlines !== false;
+        streamGeo.setDrawRange(0, activeCount);
+
         const positions = threeRef.current.streamlineData.positions;
         const colors = threeRef.current.streamlineData.colors;
-        const meta = threeRef.current.streamlineData.metadata;
-        const step = (windSpeed * 0.016) / 2.2;
+        const pList = threeRef.current.streamlineData.particles;
+        const vInf = Math.max(1.0, currentWind.windSpeed || 45.0);
 
-        for (let i = 0; i < maxParticles; i++) {
-          const m = meta[i];
-          m.progress += step * m.speedFactor;
-          if (m.progress > 10.6) {
-            m.progress = 0;
-          }
+        for (let i = 0; i < activeCount; i++) {
+          const p = pList[i];
 
-          // Compute Z from progress (travel from +5.3 to -5.3)
-          let currentZ = 5.3 - m.progress;
-          let currentX = m.baseX;
-          let currentY = m.baseY;
+          if (isRunning && deltaSec > 0) {
+            p.age += deltaSec;
+            // 4th-Order Runge-Kutta numerical integration
+            const nextPos = rk4Integrate(p.pos, deltaSec, currentCar, currentWind, currentCompStates);
+            p.pos.copy(nextPos);
 
-          // AERODYNAMIC DEFLECTION OVER CAR BODY
-          // Car bounds approx: X [-1.0, 1.0], Y [0.08, 1.2], Z [-2.0, 2.2]
-
-          // 1. Nose deflection (Z around 1.8 to 2.4)
-          if (currentZ > 1.2 && currentZ < 2.5) {
-            const noseDist = Math.hypot(currentX, currentY - 0.25);
-            if (noseDist < 0.65) {
-              const push = (0.65 - noseDist) * 0.6;
-              currentX += Math.sign(currentX || 1) * push;
-              currentY += push * 0.7;
+            // Recycle at outlet boundary, floor, or lifetime expiry
+            if (p.pos.z <= -5.3 || p.pos.y <= 0.025 || p.age >= p.maxLife) {
+              p.age = 0;
+              p.pos.set(p.seedX, p.seedY, 5.4 + Math.random() * 0.3);
             }
           }
 
-          // 2. Cockpit canopy deflection (Z around -0.6 to 0.8)
-          if (currentZ > -0.6 && currentZ < 0.8) {
-            if (Math.abs(currentX) < 0.75 && currentY < 1.15) {
-              const liftRatio = (1.15 - currentY) * 0.45;
-              currentY += liftRatio;
+          // Solid collision boundary safety
+          if (isPointInsideVehicle(p.pos, currentCar)) {
+            projectOutOfSolid(p.pos, currentCar);
+          }
+
+          positions[i * 3] = p.pos.x;
+          positions[i * 3 + 1] = p.pos.y;
+          positions[i * 3 + 2] = p.pos.z;
+
+          // Color calculation based on selected visualization mode
+          const vel = getVelocityField(p.pos, currentCar, currentWind, currentCompStates);
+          const speed = vel.length();
+          const speedRatio = speed / vInf;
+
+          let r = 0.1, g = 0.8, b = 0.9;
+
+          if (vizMode === 'Velocity') {
+            if (speedRatio < 0.65) {
+              // Stagnation / deceleration: Deep blue
+              r = 0.08; g = 0.35; b = 0.95;
+            } else if (speedRatio < 0.95) {
+              // Sub-freestream: Cyan
+              r = 0.05; g = 0.80; b = 0.85;
+            } else if (speedRatio < 1.15) {
+              // Freestream: Emerald green
+              r = 0.15; g = 0.85; b = 0.30;
+            } else if (speedRatio < 1.35) {
+              // Accelerated flow over roof/hood: Yellow
+              r = 0.95; g = 0.80; b = 0.10;
+            } else {
+              // Suction acceleration peak: Red
+              r = 0.95; g = 0.20; b = 0.10;
+            }
+          } else if (vizMode === 'Pressure') {
+            // Cp = 1 - (V/V_inf)^2
+            const cp = 1.0 - speedRatio * speedRatio;
+            if (cp > 0.35) {
+              // High stagnation pressure
+              r = 0.92; g = 0.18; b = 0.10;
+            } else if (cp > 0.0) {
+              // Moderate positive pressure
+              r = 0.95; g = 0.75; b = 0.10;
+            } else if (cp > -0.6) {
+              // Attached negative pressure
+              r = 0.10; g = 0.85; b = 0.40;
+            } else {
+              // High suction
+              r = 0.08; g = 0.35; b = 0.95;
+            }
+          } else if (vizMode === 'Streamlines') {
+            // Pure aerodynamic streamline electric teal
+            r = 0.05; g = 0.92; b = 0.88;
+          } else if (vizMode === 'Separation') {
+            // Separation mode: Highlight detached flow in bright warning red
+            const isSeparatedWake = p.pos.z < -2.35 && vel.z > -vInf * 0.4;
+            const isWingSeparated = currentCompStates.rearWing === 'STALLED' && p.pos.z < -1.8 && p.pos.z > -3.5 && p.pos.y > 1.2 && p.pos.y < 1.9;
+            const isDiffuserSeparated = currentCompStates.diffuser === 'SEPARATED' && p.pos.z < -1.7 && p.pos.z > -3.2 && p.pos.y < 0.55;
+
+            if (isSeparatedWake || isWingSeparated || isDiffuserSeparated) {
+              r = 0.98; g = 0.15; b = 0.15; // Warning red
+            } else {
+              r = 0.20; g = 0.55; b = 0.70; // Neutral slate
+            }
+          } else if (vizMode === 'Surface') {
+            // Subtle dimmed tracers to focus on car body
+            r = 0.25; g = 0.45; b = 0.65;
+          } else if (vizMode === 'Combined') {
+            // Combined: Velocity color + highlight separation wake in red
+            if (p.pos.z < -2.35 && vel.z > -vInf * 0.3) {
+              r = 0.95; g = 0.18; b = 0.18;
+            } else if (speedRatio < 0.7) {
+              r = 0.08; g = 0.35; b = 0.95;
+            } else if (speedRatio < 1.15) {
+              r = 0.15; g = 0.85; b = 0.30;
+            } else {
+              r = 0.95; g = 0.75; b = 0.10;
             }
           }
 
-          // 3. Rear Wing downwash deflection (Z around -1.2 to -2.0)
-          if (currentZ < -1.1 && currentZ > -2.1 && Math.abs(currentX) < currentCar.rearWingSpan * 0.55) {
-            const wingAOA = currentCar.rearWingAOA || 11.5;
-            // Negative deflection downward
-            const downwash = Math.sin((wingAOA * Math.PI) / 180) * 0.28;
-            currentY -= downwash * ((-1.1 - currentZ) / 0.9);
-          }
-
-          // Turbulence jitter
-          currentX += (Math.random() - 0.5) * turbulence * 0.04;
-          currentY += (Math.random() - 0.5) * turbulence * 0.04;
-
-          positions[i * 3] = currentX;
-          positions[i * 3 + 1] = Math.max(0.04, currentY);
-          positions[i * 3 + 2] = currentZ;
-
-          // Color calculation based on local flow velocity
-          // Acceleration over canopy and wing underside: yellow/red
-          // Stagnation at nose: blue
-          let localSpeed = 1.0;
-          if (currentZ > 1.6 && currentZ < 2.2 && Math.abs(currentX) < 0.5) {
-            localSpeed = 0.45; // Stagnation
-          } else if (currentZ > -0.4 && currentZ < 0.6 && currentY > 0.8) {
-            localSpeed = 1.45; // Canopy suction acceleration
-          } else if (currentZ < -1.2 && currentZ > -1.8 && currentY > 0.85) {
-            localSpeed = 1.35; // Wing flow
-          }
-
-          let pColor;
-          if (localSpeed < 0.8) {
-            pColor = colorBlue;
-          } else if (localSpeed < 1.15) {
-            pColor = colorGreen;
-          } else if (localSpeed < 1.35) {
-            pColor = colorYellow;
-          } else {
-            pColor = colorRed;
-          }
-
-          colors[i * 3] = pColor.r;
-          colors[i * 3 + 1] = pColor.g;
-          colors[i * 3 + 2] = pColor.b;
+          colors[i * 3] = r;
+          colors[i * 3 + 1] = g;
+          colors[i * 3 + 2] = b;
         }
 
-        threeRef.current.streamlineData.geo.attributes.position.needsUpdate = true;
-        threeRef.current.streamlineData.geo.attributes.color.needsUpdate = true;
+        streamGeo.attributes.position.needsUpdate = true;
+        streamGeo.attributes.color.needsUpdate = true;
       } else if (streamlinesMesh) {
         streamlinesMesh.visible = false;
       }
@@ -561,13 +688,28 @@ export default function ThreeViewport() {
     }
   }, [activeTool]);
 
-  // 5. Update Car Geometry Dynamically when carParams or shadingMode Change
+  // 5. Update Car Geometry Dynamically when carParams, shadingMode, or componentStates Change
   useEffect(() => {
     const { carGroup, customMeshInstance } = threeRef.current;
     if (carGroup && !customMeshInstance) {
-      updateCarGeometry(carGroup, carParams, shadingMode);
+      const compStates = telemetry?.componentStates || deriveComponentStates(carParams, windTunnelParams);
+      updateCarGeometry(carGroup, carParams, shadingMode, compStates);
     }
-  }, [carParams, shadingMode]);
+  }, [carParams, shadingMode, telemetry?.componentStates, windTunnelParams]);
+
+  // Handle Debug Mode Wireframe Overlays
+  useEffect(() => {
+    if (threeRef.current.debugGroup) {
+      threeRef.current.debugGroup.visible = debugMode;
+    }
+  }, [debugMode]);
+
+  // Handle Particle Density changes
+  useEffect(() => {
+    if (threeRef.current.streamlinesMesh) {
+      threeRef.current.streamlinesMesh.geometry.setDrawRange(0, Math.min(12000, particleDensity || 3000));
+    }
+  }, [particleDensity]);
 
   // 6. Update Visibility of Scene Objects
   useEffect(() => {
@@ -580,17 +722,19 @@ export default function ThreeViewport() {
 
     if (carGroup && !customMeshInstance) {
       carGroup.visible = sceneVisibility.carAssembly !== false;
-      const chassis = carGroup.getObjectByName('Chassis');
-      if (chassis) chassis.visible = sceneVisibility.chassis !== false;
-      const splitter = carGroup.getObjectByName('Splitter');
-      if (splitter) splitter.visible = sceneVisibility.splitter !== false;
-      const cockpit = carGroup.getObjectByName('Cockpit');
+      const front = carGroup.getObjectByName('Comp_Front') || carGroup.getObjectByName('FrontSplitter') || carGroup.getObjectByName('Splitter');
+      if (front) front.visible = sceneVisibility.splitter !== false;
+      const hood = carGroup.getObjectByName('Comp_Hood') || carGroup.getObjectByName('Chassis');
+      if (hood) hood.visible = sceneVisibility.chassis !== false;
+      const body = carGroup.getObjectByName('Comp_Body');
+      if (body) body.visible = sceneVisibility.chassis !== false;
+      const cockpit = carGroup.getObjectByName('Comp_Windshield') || carGroup.getObjectByName('Comp_Roof') || carGroup.getObjectByName('Cockpit');
       if (cockpit) cockpit.visible = sceneVisibility.cockpit !== false;
-      const rearWing = carGroup.getObjectByName('RearWing');
+      const rearWing = carGroup.getObjectByName('Comp_RearWing') || carGroup.getObjectByName('RearWing');
       if (rearWing) rearWing.visible = sceneVisibility.rearWing !== false;
-      const diffuser = carGroup.getObjectByName('Diffuser');
+      const diffuser = carGroup.getObjectByName('Comp_Diffuser') || carGroup.getObjectByName('Diffuser');
       if (diffuser) diffuser.visible = sceneVisibility.diffuser !== false;
-      const wheels = carGroup.getObjectByName('Wheels');
+      const wheels = carGroup.getObjectByName('Comp_Wheels') || carGroup.getObjectByName('Wheels');
       if (wheels) wheels.visible = sceneVisibility.wheels !== false;
     }
 
@@ -716,14 +860,21 @@ export default function ThreeViewport() {
       <canvas ref={canvasRef} className="w-full h-full block cursor-crosshair" />
 
       {/* Top Left Blender Viewport Stats HUD */}
-      <div className="absolute top-3 left-3 pointer-events-none flex flex-col gap-1 text-[11px] font-mono text-zinc-300 bg-zinc-950/80 p-2.5 rounded border border-zinc-800/80 backdrop-blur-sm shadow-xl">
-        <div className="flex items-center gap-2 text-orange-400 font-semibold text-xs border-b border-zinc-800 pb-1">
-          <Activity size={13} />
-          <span>BERKELIUM VIEWPORT 3D</span>
+      <div className="absolute top-3 left-3 pointer-events-none flex flex-col gap-1 text-[11px] font-mono text-zinc-300 bg-zinc-950/85 p-2.5 rounded border border-zinc-800/90 backdrop-blur-md shadow-2xl z-20">
+        <div className="flex items-center justify-between gap-3 text-orange-400 font-semibold text-xs border-b border-zinc-800 pb-1.5">
+          <div className="flex items-center gap-1.5">
+            <Activity size={13} />
+            <span>SUV AERO VIEWPORT 3D</span>
+          </div>
+          <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
+            simulationState === 'RUNNING' ? 'bg-emerald-950/90 text-emerald-400 border border-emerald-500/50' : 'bg-amber-950/90 text-amber-400 border border-amber-500/50'
+          }`}>
+            {simulationState}
+          </span>
         </div>
         <div className="flex justify-between gap-4 mt-1">
           <span className="text-zinc-500">FPS:</span>
-          <span className={fps > 45 ? 'text-emerald-400' : 'text-amber-400'}>{fps}</span>
+          <span className={fps > 45 ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>{fps}</span>
         </div>
         <div className="flex justify-between gap-4">
           <span className="text-zinc-500">Triangles:</span>
@@ -734,17 +885,56 @@ export default function ThreeViewport() {
           <span className="text-zinc-300">[{camCoords.x}, {camCoords.y}, {camCoords.z}]</span>
         </div>
         <div className="flex justify-between gap-4">
-          <span className="text-zinc-500">Air Velocity:</span>
+          <span className="text-zinc-500">Inlet Wind Speed:</span>
           <span className="text-cyan-400 font-bold">{windTunnelParams.windSpeed} m/s</span>
         </div>
         <div className="flex justify-between gap-4">
-          <span className="text-zinc-500">Shading Mode:</span>
-          <span className="text-orange-400 capitalize">{shadingMode.replace('_', ' ')}</span>
+          <span className="text-zinc-500">Tracer Density:</span>
+          <span className="text-zinc-300">{particleDensity || 3000} RK4 streamlines</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-zinc-500">Viz Mode:</span>
+          <span className="text-orange-400 font-bold">{visualizationMode}</span>
+        </div>
+        <div className="flex justify-between gap-4 border-t border-zinc-800/80 pt-1 mt-0.5">
+          <span className="text-zinc-500">Debug Overlays:</span>
+          <span className={debugMode ? 'text-yellow-400 font-bold' : 'text-zinc-500'}>
+            {debugMode ? 'ENABLED (Boundaries)' : 'DISABLED'}
+          </span>
         </div>
       </div>
 
+      {/* Active Component Aerodynamic Warnings Banner */}
+      {telemetry?.componentStates && (
+        (telemetry.componentStates.rearWing === 'STALLED' ||
+         telemetry.componentStates.diffuser === 'SEPARATED' ||
+         telemetry.componentStates.underbody === 'SEPARATED') && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2.5 bg-red-950/95 border border-red-500/80 text-red-200 px-4 py-1.5 rounded-full shadow-2xl backdrop-blur-md text-xs font-mono font-semibold animate-pulse z-20">
+            <AlertTriangle size={15} className="text-red-400 shrink-0" />
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-red-300 font-bold">AERO STALL WARNING:</span>
+              {telemetry.componentStates.rearWing === 'STALLED' && (
+                <span className="bg-red-900/90 text-white px-2 py-0.5 rounded text-[11px] border border-red-500/60 font-bold">
+                  REAR WING STALLED ({carParams.rearWingAOA?.toFixed(1)}° &gt; 14.5°)
+                </span>
+              )}
+              {telemetry.componentStates.diffuser === 'SEPARATED' && (
+                <span className="bg-red-900/90 text-white px-2 py-0.5 rounded text-[11px] border border-red-500/60 font-bold">
+                  DIFFUSER SEPARATED ({carParams.diffuserAngle?.toFixed(1)}° &gt; 12.0°)
+                </span>
+              )}
+              {telemetry.componentStates.underbody === 'SEPARATED' && (
+                <span className="bg-red-900/90 text-white px-2 py-0.5 rounded text-[11px] border border-red-500/60 font-bold">
+                  GROUND CHOKING ({(carParams.groundClearance * 100)?.toFixed(0)}cm &lt; 6cm)
+                </span>
+              )}
+            </div>
+          </div>
+        )
+      )}
+
       {/* Top Right Blender ViewCube / Orientation Gizmo */}
-      <div className="absolute top-3 right-3 flex items-center gap-1 bg-zinc-950/80 p-1 rounded-md border border-zinc-800 backdrop-blur-sm shadow-lg text-xs font-mono">
+      <div className="absolute top-3 right-3 flex items-center gap-1 bg-zinc-950/80 p-1 rounded-md border border-zinc-800 backdrop-blur-sm shadow-lg text-xs font-mono z-20">
         <button
           onClick={() => setCameraView('persp')}
           className={`px-2 py-1 rounded transition-all ${
@@ -783,14 +973,48 @@ export default function ThreeViewport() {
         </button>
       </div>
 
-      {/* Aerodynamic Colormap Legend (visible in aero_pressure mode) */}
-      {shadingMode === 'aero_pressure' && (
-        <div className="absolute bottom-4 left-3 bg-zinc-950/85 px-3 py-2 rounded border border-zinc-800 text-[10px] font-mono text-zinc-300 backdrop-blur-sm pointer-events-none">
+      {/* Aerodynamic Colormap Legends */}
+      {visualizationMode === 'Velocity' && (
+        <div className="absolute bottom-4 left-3 bg-zinc-950/85 px-3 py-2 rounded border border-zinc-800 text-[10px] font-mono text-zinc-300 backdrop-blur-sm pointer-events-none z-20">
+          <div className="font-semibold text-zinc-400 mb-1 flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            Airflow Velocity Field |V| / V_inf
+          </div>
+          <div className="w-44 h-2 rounded-sm bg-gradient-to-r from-blue-600 via-cyan-400 via-green-500 via-yellow-400 to-red-500 mb-1" />
+          <div className="flex justify-between text-zinc-400 font-bold">
+            <span className="text-blue-400">&lt; 0.6 (Stag)</span>
+            <span className="text-emerald-400">1.0 (V_inf)</span>
+            <span className="text-red-400">&gt; 1.4 (Suction)</span>
+          </div>
+        </div>
+      )}
+
+      {visualizationMode === 'Separation' && (
+        <div className="absolute bottom-4 left-3 bg-zinc-950/85 px-3 py-2 rounded border border-zinc-800 text-[10px] font-mono text-zinc-300 backdrop-blur-sm pointer-events-none z-20">
+          <div className="font-semibold text-zinc-400 mb-1 flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+            Boundary Layer Separation
+          </div>
+          <div className="flex items-center gap-4 mt-1">
+            <div className="flex items-center gap-1.5">
+              <span className="w-3 h-2 rounded-sm bg-cyan-700" />
+              <span className="text-cyan-300">Attached Flow</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-3 h-2 rounded-sm bg-red-500" />
+              <span className="text-red-400 font-bold">Detached / Stall Wake</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {(visualizationMode === 'Pressure' || (visualizationMode === 'Surface' && shadingMode === 'aero_pressure')) && (
+        <div className="absolute bottom-4 left-3 bg-zinc-950/85 px-3 py-2 rounded border border-zinc-800 text-[10px] font-mono text-zinc-300 backdrop-blur-sm pointer-events-none z-20">
           <div className="font-semibold text-zinc-400 mb-1 flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-            Cp Surface Pressure
+            Surface Cp Pressure Coefficient
           </div>
-          <div className="w-36 h-2 rounded-sm bg-gradient-to-r from-blue-600 via-green-500 to-red-500 mb-1" />
+          <div className="w-44 h-2 rounded-sm bg-gradient-to-r from-blue-600 via-green-500 to-red-500 mb-1" />
           <div className="flex justify-between text-zinc-400 font-bold">
             <span className="text-blue-400">-1.5 (Suction)</span>
             <span className="text-emerald-400">0.0 (Ambient)</span>

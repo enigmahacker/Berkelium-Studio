@@ -122,74 +122,222 @@ export function calculateHomologationScore(carParams) {
 }
 
 /**
- * Procedurally estimates sports/LMP1 car aerodynamic coefficients (Cd, Cl, Frontal Area)
- * based on body geometry and wing attack angles.
+/**
+ * Derives discrete physical flow states for key vehicle components:
+ * - 'ATTACHED': Stable boundary layer, optimal aerodynamic performance
+ * - 'HIGH_LOAD': Near-critical adverse pressure gradient, high lift/downforce
+ * - 'SEPARATED': Turbulent detachment, vortex breakdown, or ground choking
+ * - 'STALLED': Complete boundary layer collapse on aerodynamic wing/element
  */
-export function estimateAeroCoefficients(carParams) {
+export function deriveComponentStates(carParams = {}, windTunnelParams = {}) {
+  const rearWingAOA = carParams.rearWingAOA ?? 11.5;
+  const diffuserAngle = carParams.diffuserAngle ?? 9.0;
+  const groundClearance = carParams.groundClearance ?? 0.18;
+  const splitterLength = carParams.splitterLength ?? 0.20;
+  const windSpeed = windTunnelParams.windSpeed ?? 45.0;
+
+  // 1. Rear Wing Aerodynamic State (Critical stall AoA = 14.5°)
+  let rearWing = 'ATTACHED';
+  if (rearWingAOA > 14.5) {
+    rearWing = 'STALLED';
+  } else if (rearWingAOA >= 10.0) {
+    rearWing = 'HIGH_LOAD';
+  }
+
+  // 2. Diffuser Expansion State (Detachment threshold = 12.0°)
+  let diffuser = 'ATTACHED';
+  if (diffuserAngle > 12.0) {
+    diffuser = 'SEPARATED';
+  } else if (diffuserAngle >= 8.5) {
+    diffuser = 'HIGH_LOAD';
+  }
+
+  // 3. Underbody Ground Effect Channel (Choking limit < 0.06m)
+  let underbody = 'ATTACHED';
+  if (groundClearance < 0.06) {
+    underbody = 'SEPARATED';
+  } else if (groundClearance < 0.10) {
+    underbody = 'HIGH_LOAD';
+  }
+
+  // 4. Front Splitter / Nose Air Dam
+  let front = 'ATTACHED';
+  if (splitterLength > 0.40) {
+    front = 'SEPARATED';
+  }
+
+  // 5. SUV Roof & Windshield Boundary Layer
+  let roof = 'ATTACHED';
+  if (windSpeed > 55.0) {
+    roof = 'HIGH_LOAD';
+  }
+
+  // 6. Recirculating Bluff-Body Wake
+  let wake = 'TURBULENT_BLUFF_BODY';
+  if (rearWing === 'STALLED' || diffuser === 'SEPARATED') {
+    wake = 'EXPANDED_SEPARATED_WAKE';
+  }
+
+  return {
+    front,
+    roof,
+    underbody,
+    diffuser,
+    rearWing,
+    wake
+  };
+}
+
+/**
+ * Returns a structured engineering matrix for telemetry inspection,
+ * detailing component health, exact aerodynamic deltas, and physical descriptions.
+ */
+export function getComponentStatusMatrix(carParams = {}, windTunnelParams = {}, componentStates = null) {
+  const states = componentStates || deriveComponentStates(carParams, windTunnelParams);
+
+  return [
+    {
+      id: 'rearWing',
+      name: 'Rear Wing Spoiler',
+      location: 'Roof Trailing Flap (Z=-2.15m)',
+      status: states.rearWing,
+      deltaCl: states.rearWing === 'STALLED' ? '-35%' : (states.rearWing === 'HIGH_LOAD' ? '+18%' : '+0%'),
+      deltaCd: states.rearWing === 'STALLED' ? '+45%' : (states.rearWing === 'HIGH_LOAD' ? '+8%' : '+0%'),
+      severity: states.rearWing === 'STALLED' ? 'critical' : (states.rearWing === 'HIGH_LOAD' ? 'warning' : 'normal'),
+      description: states.rearWing === 'STALLED'
+        ? 'Adverse pressure gradient triggered stall; boundary layer detached on suction side'
+        : (states.rearWing === 'HIGH_LOAD' ? 'High downforce generation with near-critical pressure gradient' : 'Boundary layer attached with smooth circulation downwash')
+    },
+    {
+      id: 'diffuser',
+      name: 'Venturi Rear Diffuser',
+      location: 'Underbody Exit (Z=-1.85m)',
+      status: states.diffuser,
+      deltaCl: states.diffuser === 'SEPARATED' ? '-28%' : (states.diffuser === 'HIGH_LOAD' ? '+15%' : '+0%'),
+      deltaCd: states.diffuser === 'SEPARATED' ? '+30%' : (states.diffuser === 'HIGH_LOAD' ? '+5%' : '+0%'),
+      severity: states.diffuser === 'SEPARATED' ? 'critical' : (states.diffuser === 'HIGH_LOAD' ? 'warning' : 'normal'),
+      description: states.diffuser === 'SEPARATED'
+        ? 'Diffuser ramp expansion angle exceeded 12.0°; vortex breakdown and underbody stall'
+        : (states.diffuser === 'HIGH_LOAD' ? 'Aggressive expansion slope; high underfloor suction' : 'Smooth boundary layer diffusion without separation')
+    },
+    {
+      id: 'underbody',
+      name: 'Underbody Floor Channel',
+      location: 'Ground Effect Floor (Y=Clearance)',
+      status: states.underbody,
+      deltaCl: states.underbody === 'SEPARATED' ? '-20%' : (states.underbody === 'HIGH_LOAD' ? '+12%' : '+0%'),
+      deltaCd: states.underbody === 'SEPARATED' ? '+25%' : (states.underbody === 'HIGH_LOAD' ? '+4%' : '+0%'),
+      severity: states.underbody === 'SEPARATED' ? 'critical' : (states.underbody === 'HIGH_LOAD' ? 'warning' : 'normal'),
+      description: states.underbody === 'SEPARATED'
+        ? 'Ride height choked (< 0.06m); boundary layer stagnation and porpoising drag spike'
+        : (states.underbody === 'HIGH_LOAD' ? 'Low ground clearance creating strong Venturi suction' : 'Optimal ground clearance channel with uninhibited mass flux')
+    },
+    {
+      id: 'front',
+      name: 'Front Splitter & Lip',
+      location: 'Front Bumper Air Dam (Z=+2.10m)',
+      status: states.front,
+      deltaCl: states.front === 'SEPARATED' ? '-10%' : '+0%',
+      deltaCd: states.front === 'SEPARATED' ? '+12%' : '+0%',
+      severity: states.front === 'SEPARATED' ? 'warning' : 'normal',
+      description: states.front === 'SEPARATED'
+        ? 'Excessive splitter overhang causing leading edge boundary layer detachment'
+        : 'Stagnation flow bifurcation correctly dividing overbody and underbody air'
+    },
+    {
+      id: 'roof',
+      name: 'SUV Roof & Windshield',
+      location: 'Windshield Cowl to Roof Rails',
+      status: states.roof,
+      deltaCl: states.roof === 'HIGH_LOAD' ? '-5%' : '+0%',
+      deltaCd: states.roof === 'HIGH_LOAD' ? '+6%' : '+0%',
+      severity: states.roof === 'HIGH_LOAD' ? 'warning' : 'normal',
+      description: states.roof === 'HIGH_LOAD'
+        ? 'High dynamic pressure over raked windshield header'
+        : 'Streamlined curvature contouring air to roof trailing spoiler'
+    },
+    {
+      id: 'wake',
+      name: 'Bluff-Body Base Wake',
+      location: 'Rear Hatch / Tailgate (Z < -2.3m)',
+      status: states.wake,
+      deltaCl: states.wake === 'EXPANDED_SEPARATED_WAKE' ? '-12%' : '+0%',
+      deltaCd: states.wake === 'EXPANDED_SEPARATED_WAKE' ? '+38%' : '+0%',
+      severity: states.wake === 'EXPANDED_SEPARATED_WAKE' ? 'critical' : 'normal',
+      description: states.wake === 'EXPANDED_SEPARATED_WAKE'
+        ? 'Stalled wing and separated diffuser greatly expand recirculating low-pressure wake volume'
+        : 'Standard SUV squareback toroidal vortex recirculation zone'
+    }
+  ];
+}
+
+/**
+ * Procedurally estimates SUV aerodynamic coefficients (Cd, Cl, Frontal Area)
+ * based on body geometry, wing attack angles, and ground proximity.
+ */
+export function estimateAeroCoefficients(carParams = {}) {
   const {
-    wheelbase: _wheelbase = 2.7,
-    width = 1.9,
-    height = 1.15,
-    splitterLength = 0.25,
+    wheelbase: _wheelbase = 2.85,
+    width = 1.98,
+    height = 1.65,
+    splitterLength = 0.20,
     rearWingAOA = 11.5,
-    rearWingSpan = 1.6,
+    rearWingSpan = 1.70,
     diffuserAngle = 9.0,
-    groundClearance = 0.08
+    groundClearance = 0.18
   } = carParams;
 
-  // Frontal Area estimation: A ≈ width * height * 0.82 (aerodynamic tuck factor)
-  const frontalArea = Number((width * height * 0.82 + (splitterLength * 0.15)).toFixed(2));
+  // Frontal Area estimation for modern performance SUV: A ≈ width * height * 0.84
+  const frontalArea = Number((width * height * 0.84 + (splitterLength * 0.12)).toFixed(2));
 
-  // Base streamlined monocoque parasite drag
-  let baseCd = 0.235;
+  // Base bluff-body SUV parasite drag (typical modern aero SUV is 0.32 - 0.36)
+  let baseCd = 0.325;
 
-  // Splitter influence: lowers base Cd slightly by guiding air, increases front downforce
+  // Splitter influence: smooths front stagnation bifurcation, increases front downforce
   baseCd -= splitterLength * 0.02;
 
   // Rear wing aerodynamics:
-  // Base zero-lift profile drag Cd0
-  const wingCd0 = 0.02;
-  let wingCl = 0.09 * Math.max(0, rearWingAOA);
+  const wingCd0 = 0.025;
+  let wingCl = 0.08 * Math.max(0, rearWingAOA);
 
   // Induced drag from finite span vortex generation: Cdi = Cl^2 / (pi * AR * e)
-  let wingCdi = calculateInducedDrag(wingCl, rearWingSpan, 0.28, 0.85);
+  let wingCdi = calculateInducedDrag(wingCl, rearWingSpan, 0.30, 0.85);
 
-  // Boundary layer stall dynamics: if AOA > 14.5°, lift collapses exponentially and pressure form drag spikes
+  // Boundary layer stall dynamics: if AOA > 14.5°, lift collapses and pressure drag spikes
   let wingStallCd = 0;
   if (rearWingAOA > 14.5) {
     const stallDelta = rearWingAOA - 14.5;
-    wingCl = wingCl * Math.exp(-stallDelta * 0.12);
-    wingStallCd = stallDelta * 0.045; // Massive separated wake pressure penalty
+    wingCl = wingCl * Math.exp(-stallDelta * 0.15); // Suction loss
+    wingStallCd = 0.05 + stallDelta * 0.04; // Massive separated wake penalty
   }
 
   const wingCd = wingCd0 + wingCdi + wingStallCd;
 
   // Front splitter downforce:
-  const splitterCl = 0.18 + splitterLength * 0.85;
+  const splitterCl = 0.12 + splitterLength * 0.65;
 
   // Underbody Venturi diffuser downforce:
-  // Optimum ground effect between 6° and 11°. Above 12°, flow detaches into turbulent separation
-  let diffuserCl = 0.35 + (diffuserAngle * 0.055);
-  let diffuserCd = 0.015 + (diffuserAngle * 0.003);
+  let diffuserCl = 0.22 + (diffuserAngle * 0.035);
+  let diffuserCd = 0.012 + (diffuserAngle * 0.0025);
 
   if (diffuserAngle > 12.0) {
     const diffStall = diffuserAngle - 12.0;
-    diffuserCl -= diffStall * 0.09;
-    diffuserCd += diffStall * 0.025;
+    diffuserCl -= diffStall * 0.06;
+    diffuserCd += diffStall * 0.035;
   }
 
   // Ground clearance factor (Venturi suction increases as clearance drops, until seal chokes)
   let groundEffectMultiplier = 1.0;
-  if (groundClearance < 0.12 && groundClearance >= 0.05) {
-    groundEffectMultiplier = 1.0 + (0.12 - groundClearance) * 4.0;
-  } else if (groundClearance < 0.05) {
-    // Choked ground effect: boundary layer collapse, porpoising drag spike
-    groundEffectMultiplier = 0.88;
-    baseCd += 0.045;
+  if (groundClearance < 0.15 && groundClearance >= 0.06) {
+    groundEffectMultiplier = 1.0 + (0.15 - groundClearance) * 2.5;
+  } else if (groundClearance < 0.06) {
+    // Choked ground effect: boundary layer collapse, viscous choking drag spike
+    groundEffectMultiplier = 0.75;
+    baseCd += 0.065;
   }
 
-  const totalCd = Number(Math.max(0.18, baseCd + wingCd + diffuserCd).toFixed(3));
-  const totalCl = Number(Math.max(0.1, (wingCl + splitterCl + diffuserCl) * groundEffectMultiplier).toFixed(3));
+  const totalCd = Number(Math.max(0.25, baseCd + wingCd + diffuserCd).toFixed(3));
+  const totalCl = Number(Math.max(0.05, (wingCl + splitterCl + diffuserCl) * groundEffectMultiplier).toFixed(3));
 
   return {
     cd: totalCd,
@@ -202,13 +350,15 @@ export function estimateAeroCoefficients(carParams) {
 /**
  * Comprehensive aerodynamic calculation function
  */
-export function calculateAerodynamics(carParams, windTunnelParams) {
+export function calculateAerodynamics(carParams = {}, windTunnelParams = {}) {
   const { windSpeed = 45.0, airDensity = 1.225 } = windTunnelParams;
   const separation = checkFlowSeparation(
-    carParams.rearWingAOA,
-    carParams.diffuserAngle,
-    carParams.groundClearance
+    carParams.rearWingAOA ?? 11.5,
+    carParams.diffuserAngle ?? 9.0,
+    carParams.groundClearance ?? 0.18
   );
+  const compStates = deriveComponentStates(carParams, windTunnelParams);
+  const compMatrix = getComponentStatusMatrix(carParams, windTunnelParams, compStates);
   const aeroCoeffs = estimateAeroCoefficients(carParams);
   const homologationScore = calculateHomologationScore(carParams);
 
@@ -220,7 +370,7 @@ export function calculateAerodynamics(carParams, windTunnelParams) {
     calculateDownforce(airDensity, windSpeed, aeroCoeffs.cl, aeroCoeffs.frontalArea)
   );
 
-  const carLength = (carParams.wheelbase || 2.7) + 1.6;
+  const carLength = (carParams.wheelbase || 2.85) + 1.95; // ~4.8m length
   const reynoldsNo = Math.round(
     calculateReynoldsNumber(airDensity, windSpeed, carLength)
   );
@@ -245,6 +395,8 @@ export function calculateAerodynamics(carParams, windTunnelParams) {
     powerRequiredHp: Number(power.hp.toFixed(1)),
     flowSeparationDetected: separation.flowSeparationDetected,
     separationDetails: separation,
-    homologationScore
+    homologationScore,
+    componentStates: compStates,
+    componentStatusMatrix: compMatrix
   };
 }

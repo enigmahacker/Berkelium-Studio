@@ -18,14 +18,14 @@ export const useStudioStore = create((set, get) => {
   };
 
   const initialCar = {
-    wheelbase: 2.7,
-    width: 1.9,
-    height: 1.15,
-    splitterLength: 0.25,
+    wheelbase: 2.85,
+    width: 1.98,
+    height: 1.65,
+    splitterLength: 0.20,
     rearWingAOA: 11.5, // degrees
-    rearWingSpan: 1.6,
+    rearWingSpan: 1.70,
     diffuserAngle: 9.0, // degrees
-    groundClearance: 0.08 // meters
+    groundClearance: 0.18 // meters (18 cm standard SUV clearance)
   };
 
   const initialTelemetry = calculateAerodynamics(initialCar, initialWind);
@@ -47,6 +47,124 @@ export const useStudioStore = create((set, get) => {
     shadingMode: 'aero_pressure',
     setShadingMode: (mode) => set({ shadingMode: mode }),
 
+    // Simulation State: 'RUNNING' | 'PAUSED'
+    simulationState: 'RUNNING',
+    toggleSimulationState: () =>
+      set((state) => {
+        const nextState = state.simulationState === 'RUNNING' ? 'PAUSED' : 'RUNNING';
+        const newEntry = {
+          id: Date.now(),
+          timestamp: new Date().toLocaleTimeString(),
+          type: 'INFO',
+          component: 'Simulation Core',
+          message: nextState === 'RUNNING' ? 'Wind tunnel flow integration resumed.' : 'Simulation execution paused.'
+        };
+        return {
+          simulationState: nextState,
+          eventLog: [newEntry, ...state.eventLog].slice(0, 80)
+        };
+      }),
+    setSimulationState: (state) => set({ simulationState: state }),
+
+    // Visualization Mode: 'Velocity' | 'Pressure' | 'Streamlines' | 'Separation' | 'Surface' | 'Combined'
+    visualizationMode: 'Velocity',
+    setVisualizationMode: (mode) => {
+      set({ visualizationMode: mode });
+      // Synchronize shading mode if appropriate
+      if (mode === 'Surface') {
+        set({ shadingMode: 'aero_pressure' });
+      }
+    },
+
+    // Particle Streamline Density: 1000 | 3000 | 6000 | 12000
+    particleDensity: 3000,
+    setParticleDensity: (density) =>
+      set((state) => ({
+        particleDensity: density,
+        windTunnelParams: { ...state.windTunnelParams, streamlineCount: density }
+      })),
+
+    // Debug Mode Overlay
+    debugMode: false,
+    toggleDebugMode: () => set((state) => ({ debugMode: !state.debugMode })),
+
+    // Event Log Console
+    eventLog: [
+      {
+        id: 1,
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'INFO',
+        component: 'Solver Core',
+        message: 'RK4 3D flow field engine initialized for Performance SUV.'
+      },
+      {
+        id: 2,
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'INFO',
+        component: 'Geometry Engine',
+        message: 'Loaded dimensionally accurate SUV bodywork (4.8m x 1.98m x 1.65m).'
+      }
+    ],
+    addEventLog: (type, component, message) => {
+      const newEntry = {
+        id: Date.now() + Math.random(),
+        timestamp: new Date().toLocaleTimeString(),
+        type,
+        component,
+        message
+      };
+      set((state) => ({
+        eventLog: [newEntry, ...state.eventLog].slice(0, 80)
+      }));
+    },
+    clearEventLog: () => set({ eventLog: [] }),
+
+    // Deterministic Simulation Reset
+    resetSimulation: () => {
+      const defaultWind = {
+        enabled: true,
+        windSpeed: 45.0,
+        airDensity: 1.225,
+        yawAngle: 0.0,
+        streamlineCount: 3000,
+        smokeRake: true,
+        turbulence: 0.05
+      };
+      const defaultCar = {
+        wheelbase: 2.85,
+        width: 1.98,
+        height: 1.65,
+        splitterLength: 0.20,
+        rearWingAOA: 11.5,
+        rearWingSpan: 1.70,
+        diffuserAngle: 9.0,
+        groundClearance: 0.18
+      };
+      const telem = calculateAerodynamics(defaultCar, defaultWind);
+      const resetEntry = {
+        id: Date.now(),
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'INFO',
+        component: 'System',
+        message: 'Simulation deterministically reset to baseline homologated SUV state.'
+      };
+      set((state) => ({
+        carParams: defaultCar,
+        windTunnelParams: defaultWind,
+        telemetry: telem,
+        simulationState: 'RUNNING',
+        visualizationMode: 'Velocity',
+        particleDensity: 3000,
+        debugMode: false,
+        aiState: {
+          ...state.aiState,
+          defectPins: [],
+          auditScore: telem.homologationScore
+        },
+        eventLog: [resetEntry, ...state.eventLog].slice(0, 80)
+      }));
+    },
+
     // Wind Tunnel parameters
     windTunnelParams: initialWind,
     setWindTunnelParams: (params) => {
@@ -58,7 +176,8 @@ export const useStudioStore = create((set, get) => {
     // Car aerodynamic geometry parameters
     carParams: initialCar,
     setCarParams: (params) => {
-      const updated = { ...get().carParams, ...params };
+      const prevCar = get().carParams;
+      const updated = { ...prevCar, ...params };
       const telemetry = calculateAerodynamics(updated, get().windTunnelParams);
       
       // Update defect pins dynamically if angles trigger separation
@@ -68,34 +187,52 @@ export const useStudioStore = create((set, get) => {
           id: 'wing-stall',
           title: 'Rear Wing Flow Stall',
           description: `AOA is ${updated.rearWingAOA.toFixed(1)}° (>14.5° max threshold). Adverse pressure gradient triggers massive boundary layer detachment.`,
-          position: [0, 1.15, -1.80], // Precise coordinates on trailing flap suction surface
+          position: [0, 1.76, -2.15],
           severity: 'critical'
         });
+        if (prevCar.rearWingAOA <= 14.5) {
+          get().addEventLog('CRIT', 'Rear Wing', `Flow separation and stall triggered at AoA = ${updated.rearWingAOA.toFixed(1)}°`);
+        }
+      } else if (prevCar.rearWingAOA > 14.5 && updated.rearWingAOA <= 14.5) {
+        get().addEventLog('INFO', 'Rear Wing', `Flow re-attached at AoA = ${updated.rearWingAOA.toFixed(1)}°. Boundary layer stable.`);
       }
+
       if (updated.diffuserAngle > 12.0) {
         defectPins.push({
           id: 'diffuser-sep',
           title: 'Diffuser Flow Separation',
           description: `Diffuser expansion angle is ${updated.diffuserAngle.toFixed(1)}° (>12° limit). Underbody suction collapses due to turbulent eddy formation.`,
-          position: [0, 0.26, -2.10], // Precise coordinates at upswept diffuser ramp exit
-          severity: 'warning'
+          position: [0, 0.28, -2.10],
+          severity: 'critical'
         });
+        if (prevCar.diffuserAngle <= 12.0) {
+          get().addEventLog('CRIT', 'Diffuser', `Vortex breakdown & flow detachment at ramp angle = ${updated.diffuserAngle.toFixed(1)}°`);
+        }
+      } else if (prevCar.diffuserAngle > 12.0 && updated.diffuserAngle <= 12.0) {
+        get().addEventLog('INFO', 'Diffuser', `Diffuser flow re-attached at ${updated.diffuserAngle.toFixed(1)}°. Ground suction restored.`);
       }
-      if (updated.groundClearance < 0.05) {
+
+      if (updated.groundClearance < 0.06) {
         defectPins.push({
           id: 'floor-seal',
           title: 'Ground Clearance Choking',
           description: `Ride height of ${(updated.groundClearance * 100).toFixed(0)}cm risks ground choking and porpoising oscillations.`,
-          position: [0, 0.08, 0], // Center underfloor venturi throat
-          severity: 'warning'
+          position: [0, 0.12, 0],
+          severity: 'critical'
         });
+        if (prevCar.groundClearance >= 0.06) {
+          get().addEventLog('CRIT', 'Underbody', `Ground choking (< 6cm) detected at ${(updated.groundClearance * 100).toFixed(0)}cm ride height.`);
+        }
+      } else if (prevCar.groundClearance < 0.06 && updated.groundClearance >= 0.06) {
+        get().addEventLog('INFO', 'Underbody', `Ride height restored to ${(updated.groundClearance * 100).toFixed(0)}cm. Venturi throat unblocked.`);
       }
+
       if (updated.splitterLength > 0.38) {
         defectPins.push({
           id: 'splitter-scrape',
           title: 'Splitter Extension Warning',
           description: `Splitter projection of ${(updated.splitterLength * 100).toFixed(0)}cm exceeds optimal aero balance and risks bottoming out.`,
-          position: [0, 0.12, 1.7 + updated.splitterLength * 0.4],
+          position: [0, 0.16, 2.15 + updated.splitterLength * 0.4],
           severity: 'warning'
         });
       }
@@ -234,8 +371,8 @@ carGroup.add(rightVG);
     closeProjectLauncher: () => set({ isProjectLauncherOpen: false }),
 
     currentProject: {
-      name: 'Le Mans Hypercar Prototype (LMP1)',
-      path: '/projects/hypercar_aerodynamics',
+      name: 'Performance SUV Aerodynamics Studio',
+      path: '/projects/suv_aerodynamics',
       files: [
         { name: 'simulation.py', language: 'python', type: 'script' },
         { name: 'aerodynamics_solver.cpp', language: 'cpp', type: 'kernel' },

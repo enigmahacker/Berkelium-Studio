@@ -2,19 +2,24 @@ import { useState, Suspense, lazy } from 'react';
 import { useStudioStore } from './store/useStudioStore';
 import TopMenu from './components/layout/TopMenu';
 import ToolShelf from './components/layout/ToolShelf';
+import SimulationControls from './components/layout/SimulationControls';
 import ThreeViewport from './components/viewport/ThreeViewport';
 import Outliner from './components/layout/Outliner';
 import Inspector from './components/layout/Inspector';
 import DualAIPanel from './components/ai/DualAIPanel';
+import EngineeringDiagnostics from './components/telemetry/EngineeringDiagnostics';
 import TelemetryBar from './components/telemetry/TelemetryBar';
 import AuthModal from './components/auth/AuthModal';
 import ProjectLauncherModal from './components/project/ProjectLauncherModal';
 import { 
+  Activity,
   Layers, 
   Sparkles, 
   Code2, 
   PanelRightClose,
-  PanelRightOpen
+  PanelRightOpen,
+  PanelLeftClose,
+  PanelLeftOpen
 } from 'lucide-react';
 
 // Code-splitting: Lazy load the heavy Monaco editor on demand
@@ -22,19 +27,22 @@ const MonacoScriptEditor = lazy(() => import('./components/editor/MonacoScriptEd
 
 export default function App() {
   const { activeWorkspace } = useStudioStore();
-  const [rightPanelMode, setRightPanelMode] = useState('auto'); // 'auto' | 'inspector' | 'ai' | 'script'
+  const [rightPanelMode, setRightPanelMode] = useState('auto'); // 'auto' | 'diagnostics' | 'inspector' | 'ai' | 'script'
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isLeftControlsOpen, setIsLeftControlsOpen] = useState(true);
 
   // Determine which panel to show on the right based on active workspace or manual override
   const getActiveRightPanel = () => {
+    if (rightPanelMode === 'diagnostics') return 'diagnostics';
     if (rightPanelMode === 'inspector') return 'inspector';
     if (rightPanelMode === 'ai') return 'ai';
     if (rightPanelMode === 'script') return 'script';
 
     // Auto behavior from activeWorkspace
+    if (activeWorkspace === 'aero') return 'diagnostics';
     if (activeWorkspace === 'audit') return 'ai';
     if (activeWorkspace === 'scripting') return 'script';
-    return 'inspector';
+    return 'diagnostics';
   };
 
   const activePanel = getActiveRightPanel();
@@ -48,6 +56,31 @@ export default function App() {
       <div className="flex-1 flex overflow-hidden relative">
         {/* Left Vertical Blender Tool Shelf */}
         <ToolShelf />
+
+        {/* Left Simulation Controls Workstation Panel */}
+        {isLeftControlsOpen && (
+          <div className="h-full relative shrink-0">
+            <SimulationControls />
+            <button
+              onClick={() => setIsLeftControlsOpen(false)}
+              className="absolute top-2 right-2 z-20 p-1 text-zinc-500 hover:text-zinc-300 rounded hover:bg-zinc-800"
+              title="Collapse Simulation Controls"
+            >
+              <PanelLeftClose size={13} />
+            </button>
+          </div>
+        )}
+
+        {/* Expand button when left controls are collapsed */}
+        {!isLeftControlsOpen && (
+          <button
+            onClick={() => setIsLeftControlsOpen(true)}
+            className="absolute top-3 left-14 z-30 p-1.5 bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 rounded shadow-xl"
+            title="Expand Simulation Controls"
+          >
+            <PanelLeftOpen size={15} />
+          </button>
+        )}
 
         {/* Center Viewport Area */}
         <main className="flex-1 h-full relative overflow-hidden bg-zinc-900 flex">
@@ -73,12 +106,27 @@ export default function App() {
           )}
         </main>
 
-        {/* Right Collapsible Panel (Outliner/Inspector, Dual AI, or Monaco Editor for other workspaces) */}
+        {/* Right Collapsible Panel (Diagnostics, Outliner/Inspector, Dual AI, or Monaco Editor) */}
         {!(activeWorkspace === 'scripting' && activePanel === 'script') && isSidebarOpen && (
-          <aside className="w-80 md:w-96 h-full border-l border-zinc-800 bg-zinc-950 flex flex-col z-20 transition-all">
+          <aside className="w-80 md:w-96 h-full border-l border-zinc-800 bg-zinc-950 flex flex-col z-20 shrink-0 transition-all">
             {/* Right Panel Sub-Header Switcher */}
             <div className="h-8 px-2 border-b border-zinc-800 bg-zinc-900/90 flex items-center justify-between text-xs">
               <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setRightPanelMode('diagnostics')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-medium transition-all ${
+                    activePanel === 'diagnostics'
+                      ? 'bg-zinc-800 text-cyan-400 font-bold'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                  title="Aerodynamic Diagnostics & Event Console"
+                >
+                  <span className="flex items-center gap-1">
+                    <Activity size={12} />
+                    <span>Diagnostics</span>
+                  </span>
+                </button>
+
                 <button
                   onClick={() => setRightPanelMode('inspector')}
                   className={`px-2 py-0.5 rounded text-[11px] font-medium transition-all ${
@@ -90,7 +138,7 @@ export default function App() {
                 >
                   <span className="flex items-center gap-1">
                     <Layers size={12} />
-                    <span>CAD Scene</span>
+                    <span>Scene</span>
                   </span>
                 </button>
 
@@ -137,6 +185,8 @@ export default function App() {
 
             {/* Panel Body */}
             <div className="flex-1 overflow-hidden flex flex-col">
+              {activePanel === 'diagnostics' && <EngineeringDiagnostics />}
+
               {activePanel === 'inspector' && (
                 <>
                   <div className="h-1/3 min-h-[160px] border-b border-zinc-800">
